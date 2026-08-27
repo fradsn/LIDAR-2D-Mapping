@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QFileDialog, QGroupBox, QSlider, QCheckBox)
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+                             QPushButton, QLabel, QFileDialog, QGroupBox, QSlider, QCheckBox, QScrollArea)
 from PyQt6.QtCore import Qt, QTimer
 
 from core.ble_manager import BLEManager
@@ -13,7 +13,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LiDAR Studio 2D - Professional Desktop Suite")
-        self.resize(1300, 800)
+        self.resize(1280, 820)
 
         self.slam = SLAMEngine(spatial_resolution_m=0.03, time_tolerance_ms=80.0)
         self.ble = BLEManager()
@@ -33,18 +33,35 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(8)
 
         # 1. Canvas Mappa 2D (Sinistra)
         self.map_canvas = MapCanvas(grid_size_m=16.0)
         main_layout.addWidget(self.map_canvas, stretch=3)
 
-        # 2. Pannello Laterale (Destra)
-        side_panel = QVBoxLayout()
-        main_layout.addLayout(side_panel, stretch=1)
+        # 2. Scroll Area per il Pannello Laterale (Destra)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical { width: 8px; background: #0d1117; border-radius: 4px; }
+            QScrollBar::handle:vertical { background: #30363d; border-radius: 4px; min-height: 20px; }
+            QScrollBar::handle:vertical:hover { background: #8b949e; }
+        """)
+        main_layout.addWidget(scroll_area, stretch=1)
+
+        side_widget = QWidget()
+        side_panel = QVBoxLayout(side_widget)
+        side_panel.setContentsMargins(4, 4, 8, 4)
+        side_panel.setSpacing(6)
+        scroll_area.setWidget(side_widget)
 
         # Bussola Radar
         box_polar = QGroupBox("Orientamento Istantaneo")
         layout_polar = QVBoxLayout()
+        layout_polar.setContentsMargins(6, 6, 6, 6)
         self.polar_widget = PolarWidget()
         layout_polar.addWidget(self.polar_widget, alignment=Qt.AlignmentFlag.AlignCenter)
         box_polar.setLayout(layout_polar)
@@ -53,6 +70,8 @@ class MainWindow(QMainWindow):
         # Controllo Hardware Piatto
         box_hw = QGroupBox("Controllo Piatto Rotante")
         layout_hw = QVBoxLayout()
+        layout_hw.setContentsMargins(6, 6, 6, 6)
+        layout_hw.setSpacing(4)
         self.lbl_speed = QLabel("Velocità: 12 RPM")
         self.slider_speed = QSlider(Qt.Orientation.Horizontal)
         self.slider_speed.setRange(4, 16)
@@ -68,7 +87,9 @@ class MainWindow(QMainWindow):
         # Sezione Target Detection
         box_targets = QGroupBox("Rilevamento Target")
         layout_targets = QVBoxLayout()
-        self.chk_enable_targets = QCheckBox("Abilita Rilevamento Target")
+        layout_targets.setContentsMargins(6, 6, 6, 6)
+        layout_targets.setSpacing(2)
+        self.chk_enable_targets = QCheckBox("Abilita Target Detection")
         self.chk_enable_targets.setChecked(True)
         self.lbl_targets_info = QLabel("Target Rilevati: 0")
         self.lbl_targets_info.setStyleSheet("color: #ffd600; font-weight: bold;")
@@ -80,6 +101,8 @@ class MainWindow(QMainWindow):
         # Telemetria & RSSI
         box_telemetry = QGroupBox("Diagnostica & Telemetria")
         layout_tel = QVBoxLayout()
+        layout_tel.setContentsMargins(6, 6, 6, 6)
+        layout_tel.setSpacing(2)
         self.lbl_status = QLabel("Stato: Disconnesso")
         self.lbl_angle = QLabel("Angolo: 0.0°")
         self.lbl_dist = QLabel("Distanza: 0 cm")
@@ -91,29 +114,32 @@ class MainWindow(QMainWindow):
         box_telemetry.setLayout(layout_tel)
         side_panel.addWidget(box_telemetry)
 
-        # Controlli Mappa e Strumenti CAD
+        # Controlli Mappa e Strumenti CAD (Griglia compatta)
         box_ctrl = QGroupBox("Controlli & Strumenti Mappa")
-        layout_ctrl = QVBoxLayout()
+        layout_ctrl = QGridLayout()
+        layout_ctrl.setContentsMargins(6, 6, 6, 6)
+        layout_ctrl.setSpacing(6)
         
-        self.btn_measure = QPushButton("📏 Strumento Righello (Misura)")
+        self.btn_measure = QPushButton("📏 Righello")
         self.btn_measure.setCheckable(True)
         self.btn_measure.setStyleSheet("QPushButton:checked { background-color: #e65100; color: white; font-weight: bold; }")
 
-        self.btn_clear_measures = QPushButton("🗑️ Cancella Solo Misure")
-
-        self.btn_toggle_ble = QPushButton("Connetti Scanner BLE")
-        self.btn_clear = QPushButton("Pulisci Tutta la Mappa")
-        self.btn_reset_view = QPushButton("Ripristina Vista Zoom")
-        self.btn_export_csv = QPushButton("Esporta Coordinate (CSV)")
-        self.btn_export_dxf = QPushButton("Esporta per CAD (.DXF)")
+        self.btn_clear_measures = QPushButton("🗑️ Pulisci Quote")
+        self.btn_toggle_ble = QPushButton("Connetti BLE")
+        self.btn_clear = QPushButton("Pulisci Mappa")
+        self.btn_reset_view = QPushButton("Reset Zoom")
+        self.btn_export_csv = QPushButton("Export CSV")
+        self.btn_export_dxf = QPushButton("Export DXF")
         
-        layout_ctrl.addWidget(self.btn_measure)
-        layout_ctrl.addWidget(self.btn_clear_measures)
-        layout_ctrl.addWidget(self.btn_toggle_ble)
-        layout_ctrl.addWidget(self.btn_clear)
-        layout_ctrl.addWidget(self.btn_reset_view)
-        layout_ctrl.addWidget(self.btn_export_csv)
-        layout_ctrl.addWidget(self.btn_export_dxf)
+        # Disposizione a 2 colonne per risparmiare spazio verticale
+        layout_ctrl.addWidget(self.btn_toggle_ble, 0, 0, 1, 2)
+        layout_ctrl.addWidget(self.btn_measure, 1, 0)
+        layout_ctrl.addWidget(self.btn_clear_measures, 1, 1)
+        layout_ctrl.addWidget(self.btn_clear, 2, 0)
+        layout_ctrl.addWidget(self.btn_reset_view, 2, 1)
+        layout_ctrl.addWidget(self.btn_export_csv, 3, 0)
+        layout_ctrl.addWidget(self.btn_export_dxf, 3, 1)
+        
         box_ctrl.setLayout(layout_ctrl)
         side_panel.addWidget(box_ctrl)
 
@@ -142,7 +168,7 @@ class MainWindow(QMainWindow):
     def _on_measure_toggled(self, active: bool):
         self.map_canvas.set_measure_mode(active)
         if active:
-            self.lbl_status.setText("Righello attivo: Click Sx fissa punti | Barra Spazio annulla/elimina")
+            self.lbl_status.setText("Righello attivo: Click fissa punti | Spazio annulla/elimina")
 
     def _run_target_detection(self):
         if not self.chk_enable_targets.isChecked():
@@ -192,7 +218,7 @@ class MainWindow(QMainWindow):
             self.btn_toggle_ble.setText("Disconnetti BLE")
             self.btn_toggle_ble.setStyleSheet("background-color: #8b2635; color: white; font-weight: bold;")
         else:
-            self.btn_toggle_ble.setText("Connetti Scanner BLE")
+            self.btn_toggle_ble.setText("Connetti BLE")
             self.btn_toggle_ble.setStyleSheet("")
             self.map_canvas.update_laser(self.current_angle, 0)
             self.lbl_rssi.setText("Segnale Radio: Disconnesso")
