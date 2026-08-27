@@ -1,10 +1,11 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QFileDialog, QGroupBox, QSlider)
-from PyQt6.QtCore import Qt
+                             QPushButton, QLabel, QFileDialog, QGroupBox, QSlider, QCheckBox)
+from PyQt6.QtCore import Qt, QTimer
 
 from core.ble_manager import BLEManager
 from core.slam_engine import SLAMEngine
 from core.post_processing import PostProcessor
+from core.target_detector import TargetDetector
 from ui.widgets.map_canvas import MapCanvas
 from ui.widgets.polar_widget import PolarWidget
 
@@ -12,9 +13,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LiDAR Studio 2D - Professional Desktop Suite")
-        self.resize(1300, 780)
+        self.resize(1300, 800)
 
-        # SLAMEngine con risoluzione a 3 cm e tolleranza 80ms per ray-clearing continuo
         self.slam = SLAMEngine(spatial_resolution_m=0.03, time_tolerance_ms=80.0)
         self.ble = BLEManager()
         
@@ -25,16 +25,21 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._bind_signals()
 
+        # Timer periodico per il Target Detection (4 Hz = ogni 250ms)
+        self.detection_timer = QTimer(self)
+        self.detection_timer.timeout.connect(self._run_target_detection)
+        self.detection_timer.start(250)
+
     def _setup_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
-        # 1. Canvas Mappa 2D
+        # 1. Canvas Mappa 2D (Sinistra)
         self.map_canvas = MapCanvas(grid_size_m=16.0)
         main_layout.addWidget(self.map_canvas, stretch=3)
 
-        # 2. Pannello Laterale
+        # 2. Pannello Laterale (Destra)
         side_panel = QVBoxLayout()
         main_layout.addLayout(side_panel, stretch=1)
 
@@ -49,20 +54,29 @@ class MainWindow(QMainWindow):
         # Controllo Hardware Piatto
         box_hw = QGroupBox("Controllo Piatto Rotante")
         layout_hw = QVBoxLayout()
-        
         self.lbl_speed = QLabel("Velocità: 12 RPM")
         self.slider_speed = QSlider(Qt.Orientation.Horizontal)
         self.slider_speed.setRange(4, 16)
         self.slider_speed.setValue(12)
-        
         self.btn_zero_calib = QPushButton("🎯 Imposta Zero Istantaneo")
         self.btn_zero_calib.setStyleSheet("background-color: #213042; font-weight: bold;")
-        
         layout_hw.addWidget(self.lbl_speed)
         layout_hw.addWidget(self.slider_speed)
         layout_hw.addWidget(self.btn_zero_calib)
         box_hw.setLayout(layout_hw)
         side_panel.addWidget(box_hw)
+
+        # Sezione Target Detection
+        box_targets = QGroupBox("Rilevamento Target")
+        layout_targets = QVBoxLayout()
+        self.chk_enable_targets = QCheckBox("Abilita Rilevamento Target")
+        self.chk_enable_targets.setChecked(True)
+        self.lbl_targets_info = QLabel("Target Rilevati: 0")
+        self.lbl_targets_info.setStyleSheet("color: #ffd600; font-weight: bold;")
+        layout_targets.addWidget(self.chk_enable_targets)
+        layout_targets.addWidget(self.lbl_targets_info)
+        box_targets.setLayout(layout_targets)
+        side_panel.addWidget(box_targets)
 
         # Telemetria & RSSI
         box_telemetry = QGroupBox("Diagnostica & Telemetria")
@@ -71,7 +85,6 @@ class MainWindow(QMainWindow):
         self.lbl_angle = QLabel("Angolo: 0.0°")
         self.lbl_dist = QLabel("Distanza: 0 cm")
         self.lbl_rssi = QLabel("Segnale Radio: -- dBm")
-
         layout_tel.addWidget(self.lbl_status)
         layout_tel.addWidget(self.lbl_angle)
         layout_tel.addWidget(self.lbl_dist)
@@ -82,13 +95,11 @@ class MainWindow(QMainWindow):
         # Controlli Mappa
         box_ctrl = QGroupBox("Controlli Mappatura")
         layout_ctrl = QVBoxLayout()
-        
         self.btn_toggle_ble = QPushButton("Connetti Scanner BLE")
         self.btn_clear = QPushButton("Pulisci Mappa")
         self.btn_reset_view = QPushButton("Ripristina Vista Zoom")
         self.btn_export_csv = QPushButton("Esporta Coordinate (CSV)")
         self.btn_export_dxf = QPushButton("Esporta per CAD (.DXF)")
-        
         layout_ctrl.addWidget(self.btn_toggle_ble)
         layout_ctrl.addWidget(self.btn_clear)
         layout_ctrl.addWidget(self.btn_reset_view)
@@ -117,6 +128,29 @@ class MainWindow(QMainWindow):
         self.slider_speed.valueChanged.connect(self._on_speed_changed)
         self.btn_zero_calib.clicked.connect(self._on_zero_calibrate)
 
+    def _run_target_detection(self):
+        """Esegue il Target Detection classico di Dietmayer sull'ultimo giro polare."""
+        if not self.chk_enable_targets.isChecked():
+            self.map_canvas.clear_targets()
+            self.lbl_targets_info.setText("Target Rilevati: 0")
+            return
+
+        scan_data = self.slam.get_sorted_scan()
+        if len(scan_data) < 15:
+            return
+
+        # Esegue Background Subtraction + ABD Dietmayer
+        targets = TargetDetector.detect_targets_polar(
+            scan_data, 
+            background_map=self.slam.background_map,
+            min_pts=4,
+            max_pts=70,
+            max_diameter=0.85
+        )
+
+        self.map_canvas.draw_targets(targets)
+        self.lbl_targets_info.setText(f"Target Rilevati: {len(targets)}")
+
     def _on_speed_changed(self, val):
         self.lbl_speed.setText(f"Velocità: {val} RPM")
         self.ble.send_speed_command(val)
@@ -125,6 +159,7 @@ class MainWindow(QMainWindow):
         self.ble.send_zero_calibration()
         self.slam.clear()
         self.map_canvas.update_points([])
+        self.map_canvas.clear_targets()
         self.map_canvas.update_laser(self.current_angle, 0)
 
     def _on_toggle_ble(self):
@@ -166,7 +201,9 @@ class MainWindow(QMainWindow):
     def _on_clear_clicked(self):
         self.slam.clear()
         self.map_canvas.update_points([])
+        self.map_canvas.clear_targets()
         self.map_canvas.update_laser(self.current_angle, 0)
+        self.lbl_targets_info.setText("Target Rilevati: 0")
 
     def _save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Salva CSV", "", "CSV Files (*.csv)")
@@ -179,5 +216,6 @@ class MainWindow(QMainWindow):
             PostProcessor.export_dxf(path, self.slam.points_history)
 
     def closeEvent(self, event):
+        self.detection_timer.stop()
         self.ble.stop()
         event.accept()

@@ -7,6 +7,7 @@ class MapCanvas(QWidget):
     def __init__(self, grid_size_m=16.0, parent=None):
         super().__init__(parent)
         self.grid_size = grid_size_m
+        self.target_items = []
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -22,7 +23,7 @@ class MapCanvas(QWidget):
 
         self._draw_distance_circles()
 
-        # Nuvola di punti accumulata (Ciano Neon brillante)
+        # Nuvola Punti Ciano
         self.scatter_points = pg.ScatterPlotItem(
             size=4,
             pen=pg.mkPen('#00e5ff', width=0.5),
@@ -31,13 +32,11 @@ class MapCanvas(QWidget):
         )
         self.plot_widget.addItem(self.scatter_points)
 
-        # Raggio Laser in tempo reale
+        # Fascio Laser e cursore d'impatto
         self.laser_beam = self.plot_widget.plot(
             [0, 0], [0, 0],
             pen=pg.mkPen('#00ff88', width=1.5, style=Qt.PenStyle.DashLine)
         )
-        
-        # Cursore d'impatto istantaneo
         self.hit_marker = self.plot_widget.plot(
             [0], [0],
             symbol='o', symbolSize=7, symbolBrush='#ffffff', symbolPen=pg.mkPen('#00ff88', width=2)
@@ -80,6 +79,31 @@ class MapCanvas(QWidget):
 
         self.laser_beam.setData([0, x], [0, y])
         self.hit_marker.setData([x], [y])
+
+    def draw_targets(self, targets):
+        """Disegna anelli e marker sui target rilevati."""
+        self.clear_targets()
+        theta = np.linspace(0, 2 * np.pi, 30)
+
+        for t in targets:
+            cx = t.x + t.radius_m * np.cos(theta)
+            cy = t.y + t.radius_m * np.sin(theta)
+            
+            # Anello Giallo tratteggiato
+            ring = self.plot_widget.plot(cx, cy, pen=pg.mkPen('#ffd600', width=1.5, style=Qt.PenStyle.DashLine))
+            # Crocetta centrale
+            mark = self.plot_widget.plot([t.x], [t.y], symbol='x', symbolSize=8, symbolPen=pg.mkPen('#ffd600', width=2))
+            # Etichetta ID + Distanza
+            lbl = pg.TextItem(f"Target {t.id} ({t.distance_m:.2f}m)", color='#ffd600', anchor=(0.5, -0.5))
+            lbl.setPos(t.x, t.y)
+            self.plot_widget.addItem(lbl)
+
+            self.target_items.extend([ring, mark, lbl])
+
+    def clear_targets(self):
+        for item in self.target_items:
+            self.plot_widget.removeItem(item)
+        self.target_items.clear()
 
     def reset_view(self):
         self.plot_widget.setRange(xRange=[-8.5, 8.5], yRange=[-8.5, 8.5])
