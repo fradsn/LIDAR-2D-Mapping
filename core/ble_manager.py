@@ -10,7 +10,7 @@ class BLEManager(QObject):
     angle_received = pyqtSignal(float)
     distance_received = pyqtSignal(float)
     status_changed = pyqtSignal(str)
-    connection_changed = pyqtSignal(bool)  # True = Connesso, False = Disconnesso
+    connection_changed = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
@@ -19,14 +19,14 @@ class BLEManager(QObject):
         self._loop = None
 
     def start(self):
-        if self._running:
+        if self._running or (self._thread and self._thread.is_alive()):
             return
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
     def stop(self):
-        """Richiede la disconnessione pulita dei dispositivi."""
+        """Richiede l'arresto immediato del thread asincrono."""
         if not self._running:
             return
         self.status_changed.emit("Disconnessione in corso...")
@@ -37,14 +37,19 @@ class BLEManager(QObject):
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._worker())
+        except asyncio.CancelledError:
+            pass
         finally:
             self._loop.close()
 
     async def _worker(self):
         self.status_changed.emit("Scansione dispositivi BLE...")
+
+        # 1. Scansione parallela simultanea per dimezzare i tempi di attesa
+        scan_stepper = BleakScanner.find_device_by_name("ESP32_RotaryPlate", timeout=5.0)
+        scan_lidar   = BleakScanner.find_device_by_name("ESP32_LidarNode", timeout=5.0)
         
-        stepper_dev = await BleakScanner.find_device_by_name("ESP32_RotaryPlate", timeout=6.0)
-        lidar_dev   = await BleakScanner.find_device_by_name("ESP32_LidarNode", timeout=6.0)
+        stepper_dev, lidar_dev = await asyncio.gather(scan_stepper, scan_lidar)
 
         if not self._running:
             self.status_changed.emit("Connessione annullata.")
@@ -52,44 +57,79 @@ class BLEManager(QObject):
             return
 
         if not stepper_dev or not lidar_dev:
-            self.status_changed.emit("Errore: Dispositivi BLE non trovati.")
+            missing = []
+            if not stepper_dev: missing.append("ESP32_RotaryPlate")
+            if not lidar_dev: missing.append("ESP32_LidarNode")
+            self.status_changed.emit(f"Non trovati: {', '.join(missing)}")
             self.connection_changed.emit(False)
             self._running = False
             return
 
         self.status_changed.emit("Connessione ai nodi...")
+
+        # 2. Callback se un ESP32 cade o si spegne
+        def on_disconnect_stepper(client):
+            self.status_changed.emit("ESP32 Motore disconnesso!")
+            self._running = False
+
+        def on_disconnect_lidar(client):
+            self.status_changed.emit("ESP32 LiDAR disconnesso!")
+            self._running = False
+
+        client_stepper = BleakClient(stepper_dev, disconnected_callback=on_disconnect_stepper)
+        client_lidar   = BleakClient(lidar_dev, disconnected_callback=on_disconnect_lidar)
+
         try:
-            async with BleakClient(stepper_dev) as client_stepper, BleakClient(lidar_dev) as client_lidar:
-                self.status_changed.emit("Dispositivi Connessi e Sincronizzati")
-                self.connection_changed.emit(True)
+            # Connessione simultanea a entrambi i dispositivi
+            await asyncio.gather(client_stepper.connect(), client_lidar.connect())
 
-                def on_stepper(_, data):
-                    try:
-                        self.angle_received.emit(float(data.decode().strip()))
-                    except ValueError: pass
+            if not (client_stepper.is_connected and client_lidar.is_connected):
+                raise ConnectionError("Impossibile stabilire la sessione con entrambi i nodi.")
 
-                def on_lidar(_, data):
-                    try:
-                        self.distance_received.emit(float(data.decode().strip()))
-                    except ValueError: pass
+            self.status_changed.emit("Dispositivi Connessi e Sincronizzati")
+            self.connection_changed.emit(True)
 
-                await client_stepper.start_notify(STEPPER_CHAR_UUID, on_stepper)
-                await client_lidar.start_notify(LIDAR_CHAR_UUID, lidar_handler := on_lidar)
-
-                # Loop di mantenimento attivo fino a richiesta di stop
-                while self._running:
-                    await asyncio.sleep(0.1)
-
-                # Chiusura notifiche prima dell'uscita dal context manager
+            # Handler per le notifiche
+            def on_stepper(_, data):
                 try:
-                    await client_stepper.stop_notify(STEPPER_CHAR_UUID)
-                    await client_lidar.stop_notify(LIDAR_CHAR_UUID)
-                except Exception:
+                    self.angle_received.emit(float(data.decode().strip()))
+                except ValueError:
                     pass
 
+            def on_lidar(_, data):
+                try:
+                    self.distance_received.emit(float(data.decode().strip()))
+                except ValueError:
+                    pass
+
+            await client_stepper.start_notify(STEPPER_CHAR_UUID, on_stepper)
+            await client_lidar.start_notify(LIDAR_CHAR_UUID, on_lidar)
+
+            # 3. Monitoraggio continuo stato connessione
+            while self._running and client_stepper.is_connected and client_lidar.is_connected:
+                await asyncio.sleep(0.05)
+
         except Exception as e:
-            self.status_changed.emit(f"Disconnesso / Errore: {str(e)}")
+            self.status_changed.emit(f"Errore BLE: {str(e)}")
         finally:
+            # 4. Disconnessione pulita e sicura
             self._running = False
+            
+            async def disconnect_safe(client, uuid):
+                if client and client.is_connected:
+                    try:
+                        await client.stop_notify(uuid)
+                    except Exception:
+                        pass
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+
+            await asyncio.gather(
+                disconnect_safe(client_stepper, STEPPER_CHAR_UUID),
+                disconnect_safe(client_lidar, LIDAR_CHAR_UUID)
+            )
+
             self.connection_changed.emit(False)
             self.status_changed.emit("Disconnesso")
