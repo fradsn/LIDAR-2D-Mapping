@@ -62,11 +62,17 @@ class MapCanvas(QWidget):
             self.plot_widget.addItem(txt)
 
     def update_points(self, points_xy):
+        """Aggiorna la nuvola di punti con refresh forzato immediato."""
         if len(points_xy) > 0:
-            arr = np.array(points_xy)
+            arr = np.array(points_xy, dtype=np.float32)
             self.scatter_points.setData(pos=arr)
         else:
-            self.scatter_points.clear()
+            # Forza uno svuotamento esplicito delle coordinate
+            self.scatter_points.setData(pos=np.empty((0, 2)))
+        
+        # Forza il ridisegno immediato del canvas senza attendere eventi mouse
+        self.plot_widget.getViewBox().updateAutoRange()
+        self.plot_widget.update()
 
     def update_laser(self, angle_deg, distance_cm):
         if distance_cm < 5.0:

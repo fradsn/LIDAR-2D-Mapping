@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QLabel, QFileDialog, QGroupBox)
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QPushButton, QLabel, QFileDialog, QGroupBox, QSlider)
 from PyQt6.QtCore import Qt
 
 from core.ble_manager import BLEManager
@@ -12,9 +12,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LiDAR Studio 2D - Professional Desktop Suite")
-        self.resize(1280, 780)
+        self.resize(1300, 780)
 
-        # Inizializzazione Core (1200 campioni = 1.5 giri / 540°)
         self.slam = SLAMEngine(max_points=1200, time_tolerance_ms=80.0)
         self.ble = BLEManager()
         
@@ -30,35 +29,56 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
-        # 1. Canvas Mappa 2D (Sinistra)
+        # 1. Canvas Mappa 2D
         self.map_canvas = MapCanvas(grid_size_m=16.0)
         main_layout.addWidget(self.map_canvas, stretch=3)
 
-        # 2. Pannello Laterale (Destra)
+        # 2. Pannello Laterale
         side_panel = QVBoxLayout()
         main_layout.addLayout(side_panel, stretch=1)
 
-        # Radar Polar Widget
-        box_polar = QGroupBox("Orientamento & Bussola")
+        # Bussola Radar
+        box_polar = QGroupBox("Orientamento Istantaneo")
         layout_polar = QVBoxLayout()
         self.polar_widget = PolarWidget()
         layout_polar.addWidget(self.polar_widget, alignment=Qt.AlignmentFlag.AlignCenter)
         box_polar.setLayout(layout_polar)
         side_panel.addWidget(box_polar)
 
-        # Telemetria & Stato
-        box_telemetry = QGroupBox("Stato Sistema")
+        # Controllo Hardware Piatto
+        box_hw = QGroupBox("Controllo Piatto Rotante")
+        layout_hw = QVBoxLayout()
+        
+        self.lbl_speed = QLabel("Velocità: 12 RPM")
+        self.slider_speed = QSlider(Qt.Orientation.Horizontal)
+        self.slider_speed.setRange(4, 16)
+        self.slider_speed.setValue(12)
+        
+        self.btn_zero_calib = QPushButton("🎯 Imposta Zero Istantaneo")
+        self.btn_zero_calib.setStyleSheet("background-color: #213042; font-weight: bold;")
+        
+        layout_hw.addWidget(self.lbl_speed)
+        layout_hw.addWidget(self.slider_speed)
+        layout_hw.addWidget(self.btn_zero_calib)
+        box_hw.setLayout(layout_hw)
+        side_panel.addWidget(box_hw)
+
+        # Telemetria & RSSI
+        box_telemetry = QGroupBox("Diagnostica & Telemetria")
         layout_tel = QVBoxLayout()
         self.lbl_status = QLabel("Stato: Disconnesso")
         self.lbl_angle = QLabel("Angolo: 0.0°")
         self.lbl_dist = QLabel("Distanza: 0 cm")
+        self.lbl_rssi = QLabel("Segnale Radio: -- dBm")
+
         layout_tel.addWidget(self.lbl_status)
         layout_tel.addWidget(self.lbl_angle)
         layout_tel.addWidget(self.lbl_dist)
+        layout_tel.addWidget(self.lbl_rssi)
         box_telemetry.setLayout(layout_tel)
         side_panel.addWidget(box_telemetry)
 
-        # Controlli Operativi
+        # Controlli Mappa
         box_ctrl = QGroupBox("Controlli Mappatura")
         layout_ctrl = QVBoxLayout()
         
@@ -79,21 +99,31 @@ class MainWindow(QMainWindow):
         side_panel.addStretch()
 
     def _bind_signals(self):
-        # Segnali BLE
         self.ble.angle_received.connect(self._on_angle_received)
         self.ble.distance_received.connect(self._on_distance_received)
         self.ble.status_changed.connect(self.lbl_status.setText)
         self.ble.connection_changed.connect(self._on_connection_changed)
+        self.ble.rssi_updated.connect(lambda s, l: self.lbl_rssi.setText(f"Segnale: Motore {s} dBm | LiDAR {l} dBm"))
 
-        # Segnali SLAM Engine
         self.slam.map_updated.connect(self._on_map_updated)
 
-        # Interazioni UI
         self.btn_toggle_ble.clicked.connect(self._on_toggle_ble)
         self.btn_clear.clicked.connect(self._on_clear_clicked)
         self.btn_reset_view.clicked.connect(self.map_canvas.reset_view)
         self.btn_export_csv.clicked.connect(self._save_csv)
         self.btn_export_dxf.clicked.connect(self._save_dxf)
+
+        self.slider_speed.valueChanged.connect(self._on_speed_changed)
+        self.btn_zero_calib.clicked.connect(self._on_zero_calibrate)
+
+    def _on_speed_changed(self, val):
+        self.lbl_speed.setText(f"Velocità: {val} RPM")
+        self.ble.send_speed_command(val)
+
+    def _on_zero_calibrate(self):
+        self.ble.send_zero_calibration()
+        self.slam.clear()
+        self.map_canvas.update_points([])
 
     def _on_toggle_ble(self):
         if not self.is_connected:
@@ -113,6 +143,7 @@ class MainWindow(QMainWindow):
             self.btn_toggle_ble.setText("Connetti Scanner BLE")
             self.btn_toggle_ble.setStyleSheet("")
             self.map_canvas.update_laser(self.current_angle, 0)
+            self.lbl_rssi.setText("Segnale Radio: Disconnesso")
 
     def _on_angle_received(self, angle):
         self.current_angle = angle
@@ -145,6 +176,5 @@ class MainWindow(QMainWindow):
             PostProcessor.export_dxf(path, self.slam.points_history)
 
     def closeEvent(self, event):
-        """Assicura la disconnessione quando l'utente chiude la finestra."""
         self.ble.stop()
         event.accept()
