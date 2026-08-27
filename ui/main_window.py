@@ -14,7 +14,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LiDAR Studio 2D - Professional Desktop Suite")
         self.resize(1300, 780)
 
-        self.slam = SLAMEngine(max_points=1200, time_tolerance_ms=80.0)
+        # SLAMEngine con risoluzione a 3 cm e tolleranza 80ms per ray-clearing continuo
+        self.slam = SLAMEngine(spatial_resolution_m=0.03, time_tolerance_ms=80.0)
         self.ble = BLEManager()
         
         self.is_connected = False
@@ -124,6 +125,7 @@ class MainWindow(QMainWindow):
         self.ble.send_zero_calibration()
         self.slam.clear()
         self.map_canvas.update_points([])
+        self.map_canvas.update_laser(self.current_angle, 0)
 
     def _on_toggle_ble(self):
         if not self.is_connected:
@@ -164,6 +166,7 @@ class MainWindow(QMainWindow):
     def _on_clear_clicked(self):
         self.slam.clear()
         self.map_canvas.update_points([])
+        self.map_canvas.update_laser(self.current_angle, 0)
 
     def _save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Salva CSV", "", "CSV Files (*.csv)")
