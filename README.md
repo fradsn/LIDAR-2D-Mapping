@@ -19,9 +19,13 @@
 - **Interactive Ruler Tool (Click & Measure):** Point-to-point canvas distance measurements with live distance overlays and quick undo/clear (`Spacebar`).
 - **CAD & Data Export:** Real-world 1:1 scale vector export to `.DXF` (compatible with AutoCAD, Fusion 360, QCAD) and tabular logging to `.CSV`.
 - **Complete Diagnostics:** Real-time animated polar radar sweep and radio link telemetry (RSSI in dBm) for both nodes.
+---
+<img width="1897" height="950" alt="Screenshot 2026-08-27 201756" src="https://github.com/user-attachments/assets/4158de00-0103-49ca-aa06-af1e7186d401" />
+
+<img width="1897" height="930" alt="Screenshot 2026-08-27 201846" src="https://github.com/user-attachments/assets/20529e3e-4b7d-437a-8f8c-8f967c8945b4" />
+<img width="1896" height="952" alt="Screenshot 2026-08-27 201947" src="https://github.com/user-attachments/assets/53d47448-5799-4526-8c5d-ffce248f571e" />
 
 ---
-
 ## 🏗️ System Architecture
 
 ```text
@@ -50,3 +54,4 @@
 | - Angle Notifications |                     | - Dist Notifications  |
 | - Speed/Zero Commands |                     | - 100 Hz Sample Rate  |
 +-----------------------+                     +-----------------------+
+
