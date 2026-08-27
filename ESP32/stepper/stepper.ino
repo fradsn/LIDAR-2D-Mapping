@@ -5,13 +5,15 @@
 #include <BLE2902.h>
 
 const int stepsPerMotorRev = 2048;
-const long stepsForPlate360 = 12288; // 6:1
+const long stepsForPlate360 = 12288; // Riduzione 6:1 (2048 * 6)
 
-const int pinIN1 = 19;
-const int pinIN2 = 18;
-const int pinIN3 = 5;
-const int pinIN4 = 21;
+// --- Nuova configurazione Pin GPIO ESP32 ---
+const int pinIN1 = 25; // IN1 -> D25
+const int pinIN2 = 27; // IN2 -> D27
+const int pinIN3 = 14; // IN3 -> D14
+const int pinIN4 = 26; // IN4 -> D26
 
+// Sequenza corretta per il 28BYJ-48 con Stepper.h: IN1, IN3, IN2, IN4
 Stepper myStepper(stepsPerMotorRev, pinIN1, pinIN3, pinIN2, pinIN4);
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -100,7 +102,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   BLEDevice::startAdvertising();
 
-  Serial.println("ESP32 Stepper: Controllo RPM e Taratura Zero attivo.");
+  Serial.println("ESP32 Stepper: Nuovi pin D25, D27, D14, D26 configurati con successo.");
 }
 
 void loop() {
