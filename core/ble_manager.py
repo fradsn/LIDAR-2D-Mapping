@@ -1,3 +1,4 @@
+import struct
 import asyncio
 import threading
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -45,7 +46,7 @@ class BLEManager(QObject):
     async def _worker(self):
         self.status_changed.emit("Scansione dispositivi BLE...")
 
-        # 1. Scansione parallela simultanea per dimezzare i tempi di attesa
+        # Scansione parallela simultanea (max 5s)
         scan_stepper = BleakScanner.find_device_by_name("ESP32_RotaryPlate", timeout=5.0)
         scan_lidar   = BleakScanner.find_device_by_name("ESP32_LidarNode", timeout=5.0)
         
@@ -67,7 +68,6 @@ class BLEManager(QObject):
 
         self.status_changed.emit("Connessione ai nodi...")
 
-        # 2. Callback se un ESP32 cade o si spegne
         def on_disconnect_stepper(client):
             self.status_changed.emit("ESP32 Motore disconnesso!")
             self._running = False
@@ -80,7 +80,6 @@ class BLEManager(QObject):
         client_lidar   = BleakClient(lidar_dev, disconnected_callback=on_disconnect_lidar)
 
         try:
-            # Connessione simultanea a entrambi i dispositivi
             await asyncio.gather(client_stepper.connect(), client_lidar.connect())
 
             if not (client_stepper.is_connected and client_lidar.is_connected):
@@ -89,30 +88,36 @@ class BLEManager(QObject):
             self.status_changed.emit("Dispositivi Connessi e Sincronizzati")
             self.connection_changed.emit(True)
 
-            # Handler per le notifiche
+            # --- Decodifica Pacchetti Binari ---
+
             def on_stepper(_, data):
-                try:
-                    self.angle_received.emit(float(data.decode().strip()))
-                except ValueError:
-                    pass
+                # Pacchetto: [uint32_t (4B)] + [float (4B)] = 8 Byte
+                if len(data) == 8:
+                    try:
+                        timestamp_ms, angle = struct.unpack('<If', data)
+                        self.angle_received.emit(angle)
+                    except struct.error:
+                        pass
 
             def on_lidar(_, data):
-                try:
-                    self.distance_received.emit(float(data.decode().strip()))
-                except ValueError:
-                    pass
+                # Pacchetto: [uint32_t (4B)] + [uint16_t (2B)] = 6 Byte
+                if len(data) == 6:
+                    try:
+                        timestamp_ms, dist_cm = struct.unpack('<IH', data)
+                        self.distance_received.emit(float(dist_cm))
+                    except struct.error:
+                        pass
 
             await client_stepper.start_notify(STEPPER_CHAR_UUID, on_stepper)
             await client_lidar.start_notify(LIDAR_CHAR_UUID, on_lidar)
 
-            # 3. Monitoraggio continuo stato connessione
+            # Monitoraggio connessione
             while self._running and client_stepper.is_connected and client_lidar.is_connected:
                 await asyncio.sleep(0.05)
 
         except Exception as e:
             self.status_changed.emit(f"Errore BLE: {str(e)}")
         finally:
-            # 4. Disconnessione pulita e sicura
             self._running = False
             
             async def disconnect_safe(client, uuid):

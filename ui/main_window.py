@@ -14,8 +14,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LiDAR Studio 2D - Professional Desktop Suite")
         self.resize(1280, 780)
 
-        # Inizializzazione Core
-        self.slam = SLAMEngine()
+        # Inizializzazione Core (1200 campioni = 1.5 giri / 540°)
+        self.slam = SLAMEngine(max_points=1200, time_tolerance_ms=80.0)
         self.ble = BLEManager()
         
         self.is_connected = False
@@ -30,11 +30,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
-        # 1. Canvas Mappa 2D
+        # 1. Canvas Mappa 2D (Sinistra)
         self.map_canvas = MapCanvas(grid_size_m=16.0)
         main_layout.addWidget(self.map_canvas, stretch=3)
 
-        # 2. Pannello Laterale
+        # 2. Pannello Laterale (Destra)
         side_panel = QVBoxLayout()
         main_layout.addLayout(side_panel, stretch=1)
 
@@ -112,21 +112,20 @@ class MainWindow(QMainWindow):
         else:
             self.btn_toggle_ble.setText("Connetti Scanner BLE")
             self.btn_toggle_ble.setStyleSheet("")
-            # Resetta il fascio laser
             self.map_canvas.update_laser(self.current_angle, 0)
 
     def _on_angle_received(self, angle):
         self.current_angle = angle
-        self.slam.update_angle(angle)
+        self.slam.add_angle_sample(angle)
         self.lbl_angle.setText(f"Angolo: {angle:5.1f}°")
-        self.polar_widget.set_telemetry(self.current_angle, self.current_dist)
+        self.polar_widget.set_telemetry(self.slam.current_interpolated_angle, self.current_dist)
 
     def _on_distance_received(self, dist):
         self.current_dist = dist
-        self.slam.add_reading(dist)
+        self.slam.add_distance_sample(dist)
         self.lbl_dist.setText(f"Distanza: {dist:5.1f} cm")
-        self.polar_widget.set_telemetry(self.current_angle, self.current_dist)
-        self.map_canvas.update_laser(self.current_angle, self.current_dist)
+        self.polar_widget.set_telemetry(self.slam.current_interpolated_angle, self.current_dist)
+        self.map_canvas.update_laser(self.slam.current_interpolated_angle, self.current_dist)
 
     def _on_map_updated(self):
         self.map_canvas.update_points(self.slam.xy_coords)
