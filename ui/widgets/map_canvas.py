@@ -1,16 +1,30 @@
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtCore import Qt, pyqtSignal
 
 class MapCanvas(QWidget):
+    cursor_position_changed = pyqtSignal(float, float, float, float)
+
     def __init__(self, grid_size_m=16.0, parent=None):
         super().__init__(parent)
         self.grid_size = grid_size_m
         self.target_items = []
         
+        # Abilita il focus della tastiera sul widget per intercettare Spazio ed Esc
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Stato Strumento Misura
+        self.measure_mode = False
+        self.measure_start_pt = None
+        self.start_marker_item = None
+        self.measure_groups = []
+        self.temp_measure_line = None
+        self.temp_measure_label = None
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
         self.plot_widget = pg.PlotWidget(title="Mappa 2D della Stanza (Metri)")
         self.plot_widget.setBackground('#0d1117')
@@ -20,6 +34,10 @@ class MapCanvas(QWidget):
         self.plot_widget.setLabel('bottom', "X", units='m')
         self.plot_widget.setLabel('left', "Y", units='m')
         layout.addWidget(self.plot_widget)
+
+        self.lbl_cursor_coords = QLabel("Cursore: X=0.00m, Y=0.00m | R=0.00m, θ=0.0°")
+        self.lbl_cursor_coords.setStyleSheet("color: #8b949e; font-size: 11px; padding: 2px 6px; background-color: #0d1117;")
+        layout.addWidget(self.lbl_cursor_coords)
 
         self._draw_distance_circles()
 
@@ -48,6 +66,10 @@ class MapCanvas(QWidget):
             symbol='+', symbolSize=12, symbolBrush='#ff9800', symbolPen=pg.mkPen('#ff9800', width=2)
         )
 
+        self.vb = self.plot_widget.getViewBox()
+        self.plot_widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self.plot_widget.scene().sigMouseClicked.connect(self._on_mouse_clicked)
+
     def _draw_distance_circles(self):
         theta = np.linspace(0, 2 * np.pi, 120)
         for r in [2.0, 4.0, 6.0, 8.0]:
@@ -57,6 +79,123 @@ class MapCanvas(QWidget):
             txt = pg.TextItem(f"{int(r)}m", color='#484f58', anchor=(0.5, 0.5))
             txt.setPos(0, r)
             self.plot_widget.addItem(txt)
+
+    def set_measure_mode(self, enabled: bool):
+        self.measure_mode = enabled
+        self._cancel_current_measurement()
+        if enabled:
+            self.setFocus()
+            self.plot_widget.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.plot_widget.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def keyPressEvent(self, event):
+        """Intercetta SPAZIO o ESC per annullare o cancellare misure."""
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Escape):
+            if self.measure_start_pt is not None:
+                # Annulla la misura in corso e rimuove P1
+                self._cancel_current_measurement()
+            elif self.measure_groups:
+                # Cancella l'ultima quota salvata (Undo)
+                last_group = self.measure_groups.pop()
+                for itm in last_group:
+                    self.plot_widget.removeItem(itm)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def _on_mouse_moved(self, pos):
+        if not self.plot_widget.sceneBoundingRect().contains(pos):
+            return
+
+        mouse_point = self.vb.mapSceneToView(pos)
+        mx, my = mouse_point.x(), mouse_point.y()
+        r_m = float(np.hypot(mx, my))
+        ang_deg = float(np.rad2deg(np.arctan2(mx, my)) % 360.0)
+
+        self.lbl_cursor_coords.setText(f"Cursore: X={mx:+.2f}m, Y={my:+.2f}m | R={r_m:.2f}m, θ={ang_deg:5.1f}°")
+        self.cursor_position_changed.emit(mx, my, r_m, ang_deg)
+
+        # Linea elastica temporanea
+        if self.measure_mode and self.measure_start_pt is not None:
+            p1 = self.measure_start_pt
+            dist = np.hypot(mx - p1[0], my - p1[1])
+
+            if self.temp_measure_line is None:
+                self.temp_measure_line = self.plot_widget.plot(
+                    [p1[0], mx], [p1[1], my],
+                    pen=pg.mkPen('#ff9100', width=2, style=Qt.PenStyle.DashLine)
+                )
+                self.temp_measure_label = pg.TextItem(f"{dist:.2f} m ({dist*100:.0f} cm)", color='#ff9100', anchor=(0.5, -0.5))
+                self.plot_widget.addItem(self.temp_measure_label)
+            else:
+                self.temp_measure_line.setData([p1[0], mx], [p1[1], my])
+                self.temp_measure_label.setText(f"{dist:.2f} m ({dist*100:.0f} cm)")
+                self.temp_measure_label.setPos((p1[0] + mx) / 2, (p1[1] + my) / 2)
+
+    def _on_mouse_clicked(self, event):
+        if not self.measure_mode:
+            return
+
+        # Cattura il focus da tastiera quando si clicca sul canvas
+        self.setFocus()
+
+        pos = event.scenePos()
+        if not self.plot_widget.sceneBoundingRect().contains(pos):
+            return
+
+        # Solo il click sinistro fissa i punti di misura
+        if event.button() == Qt.MouseButton.LeftButton:
+            pt = self.vb.mapSceneToView(pos)
+            mx, my = pt.x(), pt.y()
+
+            if self.measure_start_pt is None:
+                # 1. Fissa punto di partenza temporaneo
+                self.measure_start_pt = (mx, my)
+                self.start_marker_item = self.plot_widget.plot(
+                    [mx], [my],
+                    symbol='o', symbolSize=8, symbolBrush='#ff9100', symbolPen=pg.mkPen('#ffffff', width=1.5)
+                )
+            else:
+                # 2. Fissa punto finale e salva la quota
+                p1 = self.measure_start_pt
+                p2 = (mx, my)
+                dist = np.hypot(p2[0] - p1[0], p2[1] - p1[1])
+
+                line = self.plot_widget.plot([p1[0], p2[0]], [p1[1], p2[1]], pen=pg.mkPen('#ff9100', width=2.2))
+                end_marker = self.plot_widget.plot([p2[0]], [p2[1]], symbol='o', symbolSize=8, symbolBrush='#ff9100', symbolPen=pg.mkPen('#ffffff', width=1.5))
+                
+                lbl = pg.TextItem(f"{dist:.2f} m ({dist*100:.0f} cm)", color='#ffffff', anchor=(0.5, -0.5))
+                lbl.setPos((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+                self.plot_widget.addItem(lbl)
+
+                self.measure_groups.append([self.start_marker_item, line, end_marker, lbl])
+
+                self.start_marker_item = None
+                self._remove_temp_measure()
+                self.measure_start_pt = None
+
+    def _remove_temp_measure(self):
+        if self.temp_measure_line is not None:
+            self.plot_widget.removeItem(self.temp_measure_line)
+            self.temp_measure_line = None
+        if self.temp_measure_label is not None:
+            self.plot_widget.removeItem(self.temp_measure_label)
+            self.temp_measure_label = None
+
+    def _cancel_current_measurement(self):
+        self._remove_temp_measure()
+        if self.start_marker_item is not None:
+            self.plot_widget.removeItem(self.start_marker_item)
+            self.start_marker_item = None
+        self.measure_start_pt = None
+
+    def clear_measurements(self):
+        self._cancel_current_measurement()
+        for group in self.measure_groups:
+            for itm in group:
+                self.plot_widget.removeItem(itm)
+        self.measure_groups.clear()
 
     def update_points(self, points_xy):
         if len(points_xy) > 0:
@@ -81,7 +220,6 @@ class MapCanvas(QWidget):
         self.hit_marker.setData([x], [y])
 
     def draw_targets(self, targets):
-        """Disegna anelli e marker sui target rilevati."""
         self.clear_targets()
         theta = np.linspace(0, 2 * np.pi, 30)
 
@@ -89,11 +227,8 @@ class MapCanvas(QWidget):
             cx = t.x + t.radius_m * np.cos(theta)
             cy = t.y + t.radius_m * np.sin(theta)
             
-            # Anello Giallo tratteggiato
             ring = self.plot_widget.plot(cx, cy, pen=pg.mkPen('#ffd600', width=1.5, style=Qt.PenStyle.DashLine))
-            # Crocetta centrale
             mark = self.plot_widget.plot([t.x], [t.y], symbol='x', symbolSize=8, symbolPen=pg.mkPen('#ffd600', width=2))
-            # Etichetta ID + Distanza
             lbl = pg.TextItem(f"Target {t.id} ({t.distance_m:.2f}m)", color='#ffd600', anchor=(0.5, -0.5))
             lbl.setPos(t.x, t.y)
             self.plot_widget.addItem(lbl)

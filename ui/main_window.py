@@ -25,7 +25,6 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._bind_signals()
 
-        # Timer periodico per il Target Detection (4 Hz = ogni 250ms)
         self.detection_timer = QTimer(self)
         self.detection_timer.timeout.connect(self._run_target_detection)
         self.detection_timer.start(250)
@@ -92,14 +91,24 @@ class MainWindow(QMainWindow):
         box_telemetry.setLayout(layout_tel)
         side_panel.addWidget(box_telemetry)
 
-        # Controlli Mappa
-        box_ctrl = QGroupBox("Controlli Mappatura")
+        # Controlli Mappa e Strumenti CAD
+        box_ctrl = QGroupBox("Controlli & Strumenti Mappa")
         layout_ctrl = QVBoxLayout()
+        
+        self.btn_measure = QPushButton("📏 Strumento Righello (Misura)")
+        self.btn_measure.setCheckable(True)
+        self.btn_measure.setStyleSheet("QPushButton:checked { background-color: #e65100; color: white; font-weight: bold; }")
+
+        self.btn_clear_measures = QPushButton("🗑️ Cancella Solo Misure")
+
         self.btn_toggle_ble = QPushButton("Connetti Scanner BLE")
-        self.btn_clear = QPushButton("Pulisci Mappa")
+        self.btn_clear = QPushButton("Pulisci Tutta la Mappa")
         self.btn_reset_view = QPushButton("Ripristina Vista Zoom")
         self.btn_export_csv = QPushButton("Esporta Coordinate (CSV)")
         self.btn_export_dxf = QPushButton("Esporta per CAD (.DXF)")
+        
+        layout_ctrl.addWidget(self.btn_measure)
+        layout_ctrl.addWidget(self.btn_clear_measures)
         layout_ctrl.addWidget(self.btn_toggle_ble)
         layout_ctrl.addWidget(self.btn_clear)
         layout_ctrl.addWidget(self.btn_reset_view)
@@ -121,15 +130,21 @@ class MainWindow(QMainWindow):
 
         self.btn_toggle_ble.clicked.connect(self._on_toggle_ble)
         self.btn_clear.clicked.connect(self._on_clear_clicked)
+        self.btn_clear_measures.clicked.connect(self.map_canvas.clear_measurements)
         self.btn_reset_view.clicked.connect(self.map_canvas.reset_view)
         self.btn_export_csv.clicked.connect(self._save_csv)
         self.btn_export_dxf.clicked.connect(self._save_dxf)
 
         self.slider_speed.valueChanged.connect(self._on_speed_changed)
         self.btn_zero_calib.clicked.connect(self._on_zero_calibrate)
+        self.btn_measure.toggled.connect(self._on_measure_toggled)
+
+    def _on_measure_toggled(self, active: bool):
+        self.map_canvas.set_measure_mode(active)
+        if active:
+            self.lbl_status.setText("Righello attivo: Click Sx fissa punti | Barra Spazio annulla/elimina")
 
     def _run_target_detection(self):
-        """Esegue il Target Detection classico di Dietmayer sull'ultimo giro polare."""
         if not self.chk_enable_targets.isChecked():
             self.map_canvas.clear_targets()
             self.lbl_targets_info.setText("Target Rilevati: 0")
@@ -139,7 +154,6 @@ class MainWindow(QMainWindow):
         if len(scan_data) < 15:
             return
 
-        # Esegue Background Subtraction + ABD Dietmayer
         targets = TargetDetector.detect_targets_polar(
             scan_data, 
             background_map=self.slam.background_map,
@@ -160,6 +174,7 @@ class MainWindow(QMainWindow):
         self.slam.clear()
         self.map_canvas.update_points([])
         self.map_canvas.clear_targets()
+        self.map_canvas.clear_measurements()
         self.map_canvas.update_laser(self.current_angle, 0)
 
     def _on_toggle_ble(self):
@@ -202,6 +217,7 @@ class MainWindow(QMainWindow):
         self.slam.clear()
         self.map_canvas.update_points([])
         self.map_canvas.clear_targets()
+        self.map_canvas.clear_measurements()
         self.map_canvas.update_laser(self.current_angle, 0)
         self.lbl_targets_info.setText("Target Rilevati: 0")
 
