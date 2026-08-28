@@ -1,11 +1,10 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLabel, QFileDialog, QGroupBox, QSlider, QCheckBox, QScrollArea)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 
 from core.ble_manager import BLEManager
 from core.slam_engine import SLAMEngine
 from core.post_processing import PostProcessor
-from core.target_detector import TargetDetector
 from ui.widgets.map_canvas import MapCanvas
 from ui.widgets.polar_widget import PolarWidget
 
@@ -15,7 +14,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LiDAR Studio 2D - Professional Desktop Suite")
         self.resize(1280, 820)
 
-        self.slam = SLAMEngine(spatial_resolution_m=0.03, time_tolerance_ms=80.0)
+        self.slam = SLAMEngine(spatial_resolution_m=0.03, time_tolerance_ms=100.0)
         self.ble = BLEManager()
         
         self.is_connected = False
@@ -25,10 +24,6 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._bind_signals()
-
-        self.detection_timer = QTimer(self)
-        self.detection_timer.timeout.connect(self._run_target_detection)
-        self.detection_timer.start(250)
 
     def _setup_ui(self):
         central_widget = QWidget()
@@ -160,7 +155,9 @@ class MainWindow(QMainWindow):
         self.ble.connection_changed.connect(self._on_connection_changed)
         self.ble.rssi_updated.connect(lambda s, l: self.lbl_rssi.setText(f"Segnale: Motore {s} dBm | LiDAR {l} dBm"))
 
+        # Segnali di aggiornamento SLAM e Target automatici
         self.slam.map_updated.connect(self._on_map_updated)
+        self.slam.targets_detected.connect(self._on_targets_detected)
 
         self.btn_toggle_ble.clicked.connect(self._on_toggle_ble)
         self.btn_toggle_scan.clicked.connect(self._on_toggle_scan)
@@ -193,26 +190,19 @@ class MainWindow(QMainWindow):
         if active:
             self.lbl_status.setText("Righello attivo: Click fissa punti | Spazio annulla/elimina")
 
-    def _run_target_detection(self):
+    def _on_targets_detected(self, targets):
+        """Riceve la lista dei target direttamente da SLAMEngine in tempo reale."""
         if not self.chk_enable_targets.isChecked():
             self.map_canvas.clear_targets()
             self.lbl_targets_info.setText("Target Rilevati: 0")
             return
 
-        scan_data = self.slam.get_sorted_scan()
-        if len(scan_data) < 15:
-            return
-
-        targets = TargetDetector.detect_targets_polar(
-            scan_data, 
-            background_map=self.slam.background_map,
-            min_pts=4,
-            max_pts=70,
-            max_diameter=0.85
-        )
-
-        self.map_canvas.draw_targets(targets)
-        self.lbl_targets_info.setText(f"Target Rilevati: {len(targets)}")
+        if targets:
+            self.map_canvas.draw_targets(targets)
+            self.lbl_targets_info.setText(f"Target Rilevati: {len(targets)}")
+        else:
+            self.map_canvas.clear_targets()
+            self.lbl_targets_info.setText("Target Rilevati: 0")
 
     def _on_speed_changed(self, val):
         self.lbl_speed.setText(f"Velocità: {val} RPM")
@@ -226,6 +216,7 @@ class MainWindow(QMainWindow):
         self.map_canvas.clear_targets()
         self.map_canvas.clear_measurements()
         self.map_canvas.update_laser(self.current_angle, 0)
+        self.lbl_targets_info.setText("Target Rilevati: 0")
 
     def _on_toggle_ble(self):
         if not self.is_connected:
@@ -287,6 +278,5 @@ class MainWindow(QMainWindow):
             PostProcessor.export_dxf(path, self.slam.points_history)
 
     def closeEvent(self, event):
-        self.detection_timer.stop()
         self.ble.stop()
         event.accept()
