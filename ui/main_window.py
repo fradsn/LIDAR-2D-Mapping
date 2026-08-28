@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 
 from core.ble_manager import BLEManager
 from core.slam_engine import SLAMEngine
+from core.target_tracker import TargetTracker
 from core.post_processing import PostProcessor
 from ui.widgets.map_canvas import MapCanvas
 from ui.widgets.polar_widget import PolarWidget
@@ -16,6 +17,7 @@ class MainWindow(QMainWindow):
 
         self.slam = SLAMEngine(spatial_resolution_m=0.03, time_tolerance_ms=100.0)
         self.ble = BLEManager()
+        self.tracker = TargetTracker(self.ble, base_rpm=12, tracking_rpm=14)
         
         self.is_connected = False
         self.is_scanning = False
@@ -88,17 +90,29 @@ class MainWindow(QMainWindow):
         box_hw.setLayout(layout_hw)
         side_panel.addWidget(box_hw)
 
-        # Sezione Target Detection
-        box_targets = QGroupBox("Rilevamento Target")
+        # Sezione Target Detection & Auto-Tracking
+        box_targets = QGroupBox("Rilevamento & Tracking Target")
         layout_targets = QVBoxLayout()
         layout_targets.setContentsMargins(6, 6, 6, 6)
-        layout_targets.setSpacing(2)
+        layout_targets.setSpacing(6)
+        
         self.chk_enable_targets = QCheckBox("Abilita Target Detection")
         self.chk_enable_targets.setChecked(True)
+        
         self.lbl_targets_info = QLabel("Target Rilevati: 0")
         self.lbl_targets_info.setStyleSheet("color: #ffd600; font-weight: bold;")
+
+        # Tasto modalità Auto-Tracking Conico
+        self.btn_toggle_tracking = QPushButton("🎯 Inseguimento Automatico: OFF")
+        self.btn_toggle_tracking.setCheckable(True)
+        self.btn_toggle_tracking.setStyleSheet("""
+            QPushButton { background-color: #21262d; color: #8b949e; font-weight: bold; padding: 6px; border-radius: 4px; }
+            QPushButton:checked { background-color: #d97706; color: white; font-weight: bold; }
+        """)
+
         layout_targets.addWidget(self.chk_enable_targets)
         layout_targets.addWidget(self.lbl_targets_info)
+        layout_targets.addWidget(self.btn_toggle_tracking)
         box_targets.setLayout(layout_targets)
         side_panel.addWidget(box_targets)
 
@@ -118,7 +132,7 @@ class MainWindow(QMainWindow):
         box_telemetry.setLayout(layout_tel)
         side_panel.addWidget(box_telemetry)
 
-        # Controlli Mappa e Strumenti CAD (Griglia compatta)
+        # Controlli Mappa e Strumenti CAD
         box_ctrl = QGroupBox("Controlli & Strumenti Mappa")
         layout_ctrl = QGridLayout()
         layout_ctrl.setContentsMargins(6, 6, 6, 6)
@@ -155,12 +169,18 @@ class MainWindow(QMainWindow):
         self.ble.connection_changed.connect(self._on_connection_changed)
         self.ble.rssi_updated.connect(lambda s, l: self.lbl_rssi.setText(f"Segnale: Motore {s} dBm | LiDAR {l} dBm"))
 
-        # Segnali di aggiornamento SLAM e Target automatici
+        # Segnali SLAMEngine e TargetTracker
         self.slam.map_updated.connect(self._on_map_updated)
         self.slam.targets_detected.connect(self._on_targets_detected)
 
+        self.tracker.state_changed.connect(self.lbl_status.setText)
+        self.tracker.tracking_sector_updated.connect(self.map_canvas.draw_tracking_cone)
+        self.tracker.cone_cleared.connect(self.map_canvas.clear_tracking_cone)
+
         self.btn_toggle_ble.clicked.connect(self._on_toggle_ble)
         self.btn_toggle_scan.clicked.connect(self._on_toggle_scan)
+        self.btn_toggle_tracking.toggled.connect(self._on_toggle_tracking)
+
         self.btn_clear.clicked.connect(self._on_clear_clicked)
         self.btn_clear_measures.clicked.connect(self.map_canvas.clear_measurements)
         self.btn_reset_view.clicked.connect(self.map_canvas.reset_view)
@@ -170,6 +190,20 @@ class MainWindow(QMainWindow):
         self.slider_speed.valueChanged.connect(self._on_speed_changed)
         self.btn_zero_calib.clicked.connect(self._on_zero_calibrate)
         self.btn_measure.toggled.connect(self._on_measure_toggled)
+
+    def _on_toggle_tracking(self, checked: bool):
+        if checked:
+            self.btn_toggle_tracking.setText("🎯 Inseguimento Automatico: ON")
+            self.tracker.set_enabled(True)
+        else:
+            self.btn_toggle_tracking.setText("🎯 Inseguimento Automatico: OFF")
+            self.tracker.set_enabled(False)
+            self.map_canvas.clear_tracking_cone()
+            
+            # Se la scansione è attiva, forza il motore a tornare a ruotare a 360° continui
+            if self.is_scanning:
+                self.ble.start_scan(speed_rpm=self.slider_speed.value(), min_deg=0.0, max_deg=360.0)
+                self.lbl_status.setText("Scansione 2D a 360° ripristinata.")
 
     def _on_toggle_scan(self):
         if not self.is_scanning:
@@ -182,6 +216,8 @@ class MainWindow(QMainWindow):
             self.is_scanning = False
             self.btn_toggle_scan.setText("▶️ Avvia Scansione")
             self.btn_toggle_scan.setStyleSheet("background-color: #238636; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+            if self.btn_toggle_tracking.isChecked():
+                self.btn_toggle_tracking.setChecked(False)
             self.ble.stop_scan()
             self.lbl_status.setText("Scansione in pausa. Motore fermo.")
 
@@ -191,7 +227,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("Righello attivo: Click fissa punti | Spazio annulla/elimina")
 
     def _on_targets_detected(self, targets):
-        """Riceve la lista dei target direttamente da SLAMEngine in tempo reale."""
+        """Invia i target al canvas e al modulo di inseguimento automatico."""
         if not self.chk_enable_targets.isChecked():
             self.map_canvas.clear_targets()
             self.lbl_targets_info.setText("Target Rilevati: 0")
@@ -204,17 +240,23 @@ class MainWindow(QMainWindow):
             self.map_canvas.clear_targets()
             self.lbl_targets_info.setText("Target Rilevati: 0")
 
+        # Alimenta il motore di inseguimento FSM
+        self.tracker.process_targets(targets)
+
     def _on_speed_changed(self, val):
         self.lbl_speed.setText(f"Velocità: {val} RPM")
-        if self.is_scanning:
+        self.tracker.base_rpm = val
+        if self.is_scanning and not self.btn_toggle_tracking.isChecked():
             self.ble.send_speed_command(val)
 
     def _on_zero_calibrate(self):
         self.ble.send_zero_calibration()
         self.slam.clear()
+        self.tracker.reset_to_full_scan()
         self.map_canvas.update_points([])
         self.map_canvas.clear_targets()
         self.map_canvas.clear_measurements()
+        self.map_canvas.clear_tracking_cone()
         self.map_canvas.update_laser(self.current_angle, 0)
         self.lbl_targets_info.setText("Target Rilevati: 0")
 
@@ -241,6 +283,7 @@ class MainWindow(QMainWindow):
             self.btn_toggle_ble.setText("Connetti BLE")
             self.btn_toggle_ble.setStyleSheet("")
             self.map_canvas.update_laser(self.current_angle, 0)
+            self.map_canvas.clear_tracking_cone()
             self.lbl_rssi.setText("Segnale Radio: Disconnesso")
 
     def _on_angle_received(self, angle):
@@ -261,9 +304,11 @@ class MainWindow(QMainWindow):
 
     def _on_clear_clicked(self):
         self.slam.clear()
+        self.tracker.reset_to_full_scan()
         self.map_canvas.update_points([])
         self.map_canvas.clear_targets()
         self.map_canvas.clear_measurements()
+        self.map_canvas.clear_tracking_cone()
         self.map_canvas.update_laser(self.current_angle, 0)
         self.lbl_targets_info.setText("Target Rilevati: 0")
 

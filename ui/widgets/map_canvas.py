@@ -80,6 +80,39 @@ class MapCanvas(QWidget):
             txt.setPos(0, r)
             self.plot_widget.addItem(txt)
 
+    def draw_tracking_cone(self, min_deg: float, max_deg: float, center_deg: float):
+        """Disegna il cono visivo dinamico di tracking."""
+        self.clear_tracking_cone()
+        cone_len = 7.5  # Lunghezza del fascio visivo sul canvas in metri
+
+        rad_min = np.deg2rad(min_deg)
+        rad_max = np.deg2rad(max_deg)
+
+        x_min, y_min = cone_len * np.sin(rad_min), cone_len * np.cos(rad_min)
+        x_max, y_max = cone_len * np.sin(rad_max), cone_len * np.cos(rad_max)
+
+        # Linea limite sinistro cono
+        l1 = self.plot_widget.plot([0, x_min], [0, y_min], pen=pg.mkPen('#ff6d00', width=1.5, style=Qt.PenStyle.DashLine))
+        # Linea limite destro cono
+        l2 = self.plot_widget.plot([0, x_max], [0, y_max], pen=pg.mkPen('#ff6d00', width=1.5, style=Qt.PenStyle.DashLine))
+
+        l1.setZValue(8)
+        l2.setZValue(8)
+        
+        if not hasattr(self, 'cone_items'):
+            self.cone_items = []
+        self.cone_items.extend([l1, l2])
+
+    def clear_tracking_cone(self):
+        """Rimuove il cono visivo dal canvas."""
+        if hasattr(self, 'cone_items'):
+            for itm in self.cone_items:
+                try:
+                    self.plot_widget.removeItem(itm)
+                except Exception:
+                    pass
+            self.cone_items.clear()
+
     def set_measure_mode(self, enabled: bool):
         self.measure_mode = enabled
         self._cancel_current_measurement()

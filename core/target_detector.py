@@ -12,17 +12,17 @@ class DetectedTarget:
         
         self.distance_m = float(np.hypot(self.x, self.y))
         self.azimuth_deg = float(np.rad2deg(np.arctan2(self.x, self.y)) % 360.0)
-        self.radius_m = max(float(np.max(np.linalg.norm(self.points - self.centroid, axis=1))), 0.10)
+        self.radius_m = max(float(np.max(np.linalg.norm(self.points - self.centroid, axis=1))), 0.08)
 
 class TargetDetector:
     @staticmethod
-    def detect_targets_polar(polar_scan, background_map=None, min_pts=4, max_pts=70, max_diameter=0.85):
+    def detect_targets_polar(polar_scan, background_map=None, min_pts=4, max_pts=70, max_diameter=0.80):
         if len(polar_scan) < min_pts:
             return []
 
         num_bg = len(background_map) if background_map is not None else 720
 
-        # 1. Separazione Foreground Adattiva
+        # 1. Background Subtraction
         foreground_pts = []
         for ang, dist_cm, x, y in polar_scan:
             r_m = dist_cm / 100.0
@@ -30,8 +30,8 @@ class TargetDetector:
                 bg_idx = int((ang % 360.0) / (360.0 / num_bg)) % num_bg
                 bg_dist = background_map[bg_idx]
                 
-                # Distacco netto rispetto al perimetro noto
-                if bg_dist > 0.40 and (bg_dist - r_m) > 0.20 and (r_m / bg_dist) < 0.88:
+                # Soglia: distacco di almeno 28 cm e non oltre l'82% della profondità del muro
+                if bg_dist > 0.45 and (bg_dist - r_m) > 0.28 and (r_m / bg_dist) < 0.82:
                     foreground_pts.append((ang, r_m, x, y, bg_dist))
             else:
                 foreground_pts.append((ang, r_m, x, y, r_m + 1.0))
@@ -68,7 +68,7 @@ class TargetDetector:
         if len(current_cluster) >= min_pts:
             clusters.append(current_cluster)
 
-        # 3. Classificazione Geometrica Istantanea (Senza ritardi)
+        # 3. Classificazione Geometrica Anti-Mobile Lucido
         valid_targets = []
         target_id = 1
 
@@ -80,25 +80,43 @@ class TargetDetector:
             pts_r  = np.array([p[1] for p in cl], dtype=np.float32)
             pts_bg = np.array([p[4] for p in cl], dtype=np.float32)
             
+            # Diametro fisico
             diff = pts_xy[:, np.newaxis, :] - pts_xy[np.newaxis, :, :]
             max_span = np.max(np.linalg.norm(diff, axis=-1))
 
-            # Dimensioni valide del cluster
-            if not (0.05 <= max_span <= max_diameter):
+            if not (0.06 <= max_span <= max_diameter):
                 continue
 
-            # Distacco medio di almeno 20 cm dalla parete retrostante
-            if np.mean(pts_bg - pts_r) < 0.20:
+            # Doppio salto di flanco
+            left_flank_jump  = pts_bg[0] - pts_r[0]
+            right_flank_jump = pts_bg[-1] - pts_r[-1]
+            if left_flank_jump < 0.25 or right_flank_jump < 0.25:
                 continue
 
-            # Scarto pareti lineari piatte (PCA)
+            # Distacco medio globale dallo sfondo
+            if np.mean(pts_bg - pts_r) < 0.28:
+                continue
+
+            # --- FILTRO SUPERFICI SPECULARI PIATTE (Mobili Lucidi / Vetro) ---
             cov = np.cov(pts_xy, rowvar=False)
             if cov.shape == (2, 2):
-                eigenvalues, _ = np.linalg.eig(cov)
-                eigenvalues = np.sort(eigenvalues)[::-1]
+                eigenvalues, eigenvectors = np.linalg.eig(cov)
+                sort_indices = np.argsort(eigenvalues)[::-1]
+                eigenvalues = eigenvalues[sort_indices]
+                eigenvectors = eigenvectors[:, sort_indices]
+
+                # 1. Deviazione standard perpendicolare (spessore reale dell'oggetto)
+                ortho_std = np.sqrt(max(0.0, float(eigenvalues[1])))
+
+                # Un'anta di un mobile o un pannello lucido ha uno spessore ortogonale < 2 cm
+                # e una larghezza (max_span) > 25 cm. Un corpo reale ha una sagoma volumetrica
+                if max_span > 0.22 and ortho_std < 0.022:
+                    # Rifiuta pannello piatto / anta mobile
+                    continue
+
+                # 2. Linearità PCA
                 linearity = eigenvalues[0] / (eigenvalues[1] + 1e-6)
-                
-                if len(pts_xy) >= 6 and linearity > 25.0:
+                if len(pts_xy) >= 5 and linearity > 16.0:
                     continue
 
             valid_targets.append(DetectedTarget(target_id, pts_xy))
