@@ -19,6 +19,7 @@ class MainWindow(QMainWindow):
         self.ble = BLEManager()
         
         self.is_connected = False
+        self.is_scanning = False
         self.current_angle = 0.0
         self.current_dist = 0.0
 
@@ -67,17 +68,25 @@ class MainWindow(QMainWindow):
         box_polar.setLayout(layout_polar)
         side_panel.addWidget(box_polar)
 
-        # Controllo Hardware Piatto
+        # Controllo Hardware Piatto Rotante
         box_hw = QGroupBox("Controllo Piatto Rotante")
         layout_hw = QVBoxLayout()
         layout_hw.setContentsMargins(6, 6, 6, 6)
-        layout_hw.setSpacing(4)
+        layout_hw.setSpacing(6)
+
+        self.btn_toggle_scan = QPushButton("▶️ Avvia Scansione")
+        self.btn_toggle_scan.setEnabled(False)
+        self.btn_toggle_scan.setStyleSheet("background-color: #238636; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+
         self.lbl_speed = QLabel("Velocità: 12 RPM")
         self.slider_speed = QSlider(Qt.Orientation.Horizontal)
         self.slider_speed.setRange(4, 16)
         self.slider_speed.setValue(12)
+
         self.btn_zero_calib = QPushButton("🎯 Imposta Zero Istantaneo")
-        self.btn_zero_calib.setStyleSheet("background-color: #213042; font-weight: bold;")
+        self.btn_zero_calib.setStyleSheet("background-color: #213042; font-weight: bold; padding: 5px;")
+
+        layout_hw.addWidget(self.btn_toggle_scan)
         layout_hw.addWidget(self.lbl_speed)
         layout_hw.addWidget(self.slider_speed)
         layout_hw.addWidget(self.btn_zero_calib)
@@ -131,7 +140,6 @@ class MainWindow(QMainWindow):
         self.btn_export_csv = QPushButton("Export CSV")
         self.btn_export_dxf = QPushButton("Export DXF")
         
-        # Disposizione a 2 colonne per risparmiare spazio verticale
         layout_ctrl.addWidget(self.btn_toggle_ble, 0, 0, 1, 2)
         layout_ctrl.addWidget(self.btn_measure, 1, 0)
         layout_ctrl.addWidget(self.btn_clear_measures, 1, 1)
@@ -155,6 +163,7 @@ class MainWindow(QMainWindow):
         self.slam.map_updated.connect(self._on_map_updated)
 
         self.btn_toggle_ble.clicked.connect(self._on_toggle_ble)
+        self.btn_toggle_scan.clicked.connect(self._on_toggle_scan)
         self.btn_clear.clicked.connect(self._on_clear_clicked)
         self.btn_clear_measures.clicked.connect(self.map_canvas.clear_measurements)
         self.btn_reset_view.clicked.connect(self.map_canvas.reset_view)
@@ -164,6 +173,20 @@ class MainWindow(QMainWindow):
         self.slider_speed.valueChanged.connect(self._on_speed_changed)
         self.btn_zero_calib.clicked.connect(self._on_zero_calibrate)
         self.btn_measure.toggled.connect(self._on_measure_toggled)
+
+    def _on_toggle_scan(self):
+        if not self.is_scanning:
+            self.is_scanning = True
+            self.btn_toggle_scan.setText("⏸️ Arresta Scansione")
+            self.btn_toggle_scan.setStyleSheet("background-color: #da3633; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+            self.ble.start_scan(self.slider_speed.value())
+            self.lbl_status.setText("Scansione 2D in corso...")
+        else:
+            self.is_scanning = False
+            self.btn_toggle_scan.setText("▶️ Avvia Scansione")
+            self.btn_toggle_scan.setStyleSheet("background-color: #238636; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
+            self.ble.stop_scan()
+            self.lbl_status.setText("Scansione in pausa. Motore fermo.")
 
     def _on_measure_toggled(self, active: bool):
         self.map_canvas.set_measure_mode(active)
@@ -193,7 +216,8 @@ class MainWindow(QMainWindow):
 
     def _on_speed_changed(self, val):
         self.lbl_speed.setText(f"Velocità: {val} RPM")
-        self.ble.send_speed_command(val)
+        if self.is_scanning:
+            self.ble.send_speed_command(val)
 
     def _on_zero_calibrate(self):
         self.ble.send_zero_calibration()
@@ -214,10 +238,15 @@ class MainWindow(QMainWindow):
     def _on_connection_changed(self, connected):
         self.is_connected = connected
         self.btn_toggle_ble.setEnabled(True)
+        self.btn_toggle_scan.setEnabled(connected)
+        
         if connected:
             self.btn_toggle_ble.setText("Disconnetti BLE")
             self.btn_toggle_ble.setStyleSheet("background-color: #8b2635; color: white; font-weight: bold;")
         else:
+            self.is_scanning = False
+            self.btn_toggle_scan.setText("▶️ Avvia Scansione")
+            self.btn_toggle_scan.setStyleSheet("background-color: #238636; color: white; font-weight: bold; padding: 6px; border-radius: 4px;")
             self.btn_toggle_ble.setText("Connetti BLE")
             self.btn_toggle_ble.setStyleSheet("")
             self.map_canvas.update_laser(self.current_angle, 0)
