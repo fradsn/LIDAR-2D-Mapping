@@ -100,22 +100,20 @@ class TargetDetector:
             # --- FILTRO SUPERFICI SPECULARI PIATTE (Mobili Lucidi / Vetro) ---
             cov = np.cov(pts_xy, rowvar=False)
             if cov.shape == (2, 2):
-                eigenvalues, eigenvectors = np.linalg.eig(cov)
-                sort_indices = np.argsort(eigenvalues)[::-1]
-                eigenvalues = eigenvalues[sort_indices]
-                eigenvectors = eigenvectors[:, sort_indices]
+                # np.linalg.eigh garantisce autovalori reali puri ordinati in modo crescente [min, max]
+                eigenvalues, _ = np.linalg.eigh(cov)
+                lambda_min = float(max(0.0, eigenvalues[0]))
+                lambda_max = float(max(0.0, eigenvalues[1]))
 
-                # 1. Deviazione standard perpendicolare (spessore reale dell'oggetto)
-                ortho_std = np.sqrt(max(0.0, float(eigenvalues[1])))
+                # 1. Deviazione standard perpendicolare (spessore ortogonale reale)
+                ortho_std = np.sqrt(lambda_min)
 
-                # Un'anta di un mobile o un pannello lucido ha uno spessore ortogonale < 2 cm
-                # e una larghezza (max_span) > 25 cm. Un corpo reale ha una sagoma volumetrica
+                # Rifiuta pannello bidimensionale piatto senza volume
                 if max_span > 0.22 and ortho_std < 0.022:
-                    # Rifiuta pannello piatto / anta mobile
                     continue
 
-                # 2. Linearità PCA
-                linearity = eigenvalues[0] / (eigenvalues[1] + 1e-6)
+                # 2. Rapporto di Linearità PCA
+                linearity = lambda_max / (lambda_min + 1e-6)
                 if len(pts_xy) >= 5 and linearity > 16.0:
                     continue
 
