@@ -4,7 +4,6 @@ import threading
 from PyQt6.QtCore import QObject, pyqtSignal
 from bleak import BleakScanner, BleakClient
 
-# UUID standard unificati
 BASE_SERVICE_UUID      = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 BASE_AZIMUTH_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 BASE_CONTROL_CHAR_UUID = "beb5483f-36e1-4688-b7f5-ea07361b26a8"
@@ -13,8 +12,7 @@ PAYLOAD_SERVICE_UUID   = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 PAYLOAD_DATA_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 PAYLOAD_CTRL_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 
-SERVO_HORIZON_DEG = 135  # Quota orizzontale neutra
-GEAR_RATIO = 6.0         # Riduzione 6:1 (6 giri motore = 1 giro piatto)
+SERVO_HORIZON_DEG = 135
 
 class BLEManager(QObject):
     angle_received = pyqtSignal(float)
@@ -34,10 +32,6 @@ class BLEManager(QObject):
         self._stepper_rssi = 0
         self._lidar_rssi = 0
 
-        # Tracciamento riduzione 6:1
-        self._motor_rev_count = 0
-        self._prev_motor_angle = 0.0
-
     def start(self):
         if self._running or (self._thread and self._thread.is_alive()):
             return
@@ -51,10 +45,21 @@ class BLEManager(QObject):
         self.status_changed.emit("Disconnessione in corso...")
         self._running = False
 
-    def start_scan(self, speed_rpm: int = 12):
+    def start_scan(self, speed_rpm: int = 12, min_deg: float = 0.0, max_deg: float = 360.0):
+        """Avvia la scansione specificando RPM ed eventuale settore angolare."""
         if self._loop and self._loop.is_running() and self._cmd_queue:
-            payload = bytearray([0x01, int(speed_rpm)])
+            min_enc = int(min_deg * 10.0)
+            max_enc = int(max_deg * 10.0)
+            payload = bytearray([
+                0x01, int(speed_rpm),
+                (min_enc >> 8) & 0xFF, min_enc & 0xFF,
+                (max_enc >> 8) & 0xFF, max_enc & 0xFF
+            ])
             self._loop.call_soon_threadsafe(self._cmd_queue.put_nowait, ("BASE", payload))
+
+    def set_scan_sector(self, min_deg: float, max_deg: float, speed_rpm: int = 12):
+        """Imposta o modifica al volo l'arco di scansione / cono di targeting."""
+        self.start_scan(speed_rpm=speed_rpm, min_deg=min_deg, max_deg=max_deg)
 
     def stop_scan(self):
         if self._loop and self._loop.is_running() and self._cmd_queue:
@@ -62,13 +67,9 @@ class BLEManager(QObject):
             self._loop.call_soon_threadsafe(self._cmd_queue.put_nowait, ("BASE", payload))
 
     def send_speed_command(self, speed_rpm: int):
-        if self._loop and self._loop.is_running() and self._cmd_queue:
-            payload = bytearray([0x01, int(speed_rpm)])
-            self._loop.call_soon_threadsafe(self._cmd_queue.put_nowait, ("BASE", payload))
+        self.start_scan(speed_rpm=speed_rpm, min_deg=0.0, max_deg=360.0)
 
     def send_zero_calibration(self):
-        self._motor_rev_count = 0
-        self._prev_motor_angle = 0.0
         if self._loop and self._loop.is_running() and self._cmd_queue:
             payload = bytearray([0x02])
             self._loop.call_soon_threadsafe(self._cmd_queue.put_nowait, ("BASE", payload))
@@ -86,8 +87,6 @@ class BLEManager(QObject):
 
     async def _worker(self):
         self.status_changed.emit("Scansione dispositivi BLE...")
-        self._motor_rev_count = 0
-        self._prev_motor_angle = 0.0
 
         stepper_dev = None
         lidar_dev = None
@@ -152,33 +151,23 @@ class BLEManager(QObject):
 
             await asyncio.sleep(0.2)
 
-            # Allinea il servo a 135° (orizzonte)
+            # Blocca il servo sull'orizzonte (135°)
             try:
                 await self._client_lidar.write_gatt_char(PAYLOAD_CTRL_CHAR_UUID, bytearray([0x02, SERVO_HORIZON_DEG]), response=False)
-                print(f"[BLE 2D] Servo allineato a {SERVO_HORIZON_DEG}°")
             except Exception as e:
                 print(f"[BLE 2D] Errore posizionamento servo: {e}")
 
             self.status_changed.emit("Dispositivi Connessi. Pronto all'avvio.")
             self.connection_changed.emit(True)
 
-            # Callback Azimuth (6 byte Big-Endian, riduzione 6:1)
+            # Notifica Azimut: angolo reale del piatto ricevuto direttamente
             def on_stepper(_, data):
                 if len(data) >= 6:
                     theta_raw, _ = struct.unpack('>HI', data[:6])
-                    motor_angle = theta_raw / 10.0
-
-                    if self._prev_motor_angle > 300.0 and motor_angle < 60.0:
-                        self._motor_rev_count += 1
-                    elif self._prev_motor_angle < 60.0 and motor_angle > 300.0:
-                        self._motor_rev_count = max(0, self._motor_rev_count - 1)
-
-                    self._prev_motor_angle = motor_angle
-                    total_motor_deg = (self._motor_rev_count * 360.0) + motor_angle
-                    plate_angle = (total_motor_deg / GEAR_RATIO) % 360.0
+                    plate_angle = theta_raw / 10.0
                     self.angle_received.emit(plate_angle)
 
-            # Callback LiDAR
+            # Notifica LiDAR
             def on_lidar(_, data):
                 if len(data) >= 2:
                     dist_cm = (data[0] << 8) | data[1]
