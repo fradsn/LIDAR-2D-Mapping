@@ -12,17 +12,17 @@ class SLAMEngine(QObject):
 
         self.angle_buffer = []
         self.points_history = []
-        self.occupied_map = {}
+        self.occupied_map = {}      # (cx, cy) -> [x, y, angle, dist, confidence]
         self.xy_coords = []
         self.current_interpolated_angle = 0.0
 
-        # Background Map ad alta risoluzione: 720 slot (0.5 gradi)
+        # Background Map ad alta risoluzione: 720 slot (0.5°)
         self.NUM_BG_SLOTS = 720
         self.background_map = np.zeros(self.NUM_BG_SLOTS, dtype=np.float32)
 
-        # Coda di campionamento polare continua per il Target Detector
+        # Coda FIFO continua per il Target Detector
         self.recent_scan_samples = []
-        self.scan_retention_sec = 2.0  # Finestra temporale ottimale (2.0s)
+        self.scan_retention_sec = 2.0
         
         self._last_gui_update = 0.0
 
@@ -40,7 +40,7 @@ class SLAMEngine(QObject):
 
         now = time.perf_counter()
 
-        # Interpolazione temporale precisa
+        # 1. Interpolazione temporale dell'angolo
         t0, a0 = None, None
         t1, a1 = None, None
         for i in range(len(self.angle_buffer) - 1, 0, -1):
@@ -74,54 +74,98 @@ class SLAMEngine(QObject):
         x = r_m * sin_a
         y = r_m * cos_a
 
-        # Calcolo slot a 0.5°
+        # 2. Lookup Background Map con smoothing sui vicini (+- 1 slot)
         bg_idx = int((interp_angle % 360.0) / (360.0 / self.NUM_BG_SLOTS)) % self.NUM_BG_SLOTS
-        bg_dist = self.background_map[bg_idx]
+        
+        # Prendi il valore stimato locale robusto (massimo tra vicini per evitare falsi muri ravvicinati)
+        prev_idx = (bg_idx - 1) % self.NUM_BG_SLOTS
+        next_idx = (bg_idx + 1) % self.NUM_BG_SLOTS
+        local_bg = max(self.background_map[prev_idx], self.background_map[bg_idx], self.background_map[next_idx])
 
-        # 1. Discriminazione: distacco netto di almeno 22 cm dalla parete nota
-        is_foreground_target = (bg_dist > 0.35) and ((bg_dist - r_m) > 0.22)
+        # 3. Classificazione Target di Primo Piano
+        # Richiede distacco netto di almeno 20 cm rispetto al muro stimato
+        is_foreground_target = (local_bg > 0.35) and ((local_bg - r_m) > 0.20)
 
-        # 2. Aggiornamento protetto del Background Map
-        if bg_dist == 0.0:
+        # 4. Aggiornamento Dinamico del Background (solo perimetri reali)
+        if self.background_map[bg_idx] == 0.0:
             self.background_map[bg_idx] = r_m
-            bg_dist = r_m
-        elif r_m > bg_dist + 0.08:
-            # Parete reale più lontana
+        elif r_m > self.background_map[bg_idx] + 0.06:
+            # Il raggio penetra oltre: il muro reale è più lontano
             self.background_map[bg_idx] = r_m
-            bg_dist = r_m
         elif not is_foreground_target:
-            # Assestamento solo su superfici perimetrali
-            self.background_map[bg_idx] = 0.98 * bg_dist + 0.02 * r_m
+            # Assestamento continuo del perimetro stabile
+            self.background_map[bg_idx] = 0.98 * self.background_map[bg_idx] + 0.02 * r_m
 
-        # 3. Accumulo cronologico per il Detector
+        # 5. Accumulo per Target Detector
         self.recent_scan_samples.append((now, interp_angle, distance_cm, x, y))
-
-        cutoff_time = now - self.scan_retention_sec
-        while self.recent_scan_samples and self.recent_scan_samples[0][0] < cutoff_time:
+        cutoff = now - self.scan_retention_sec
+        while self.recent_scan_samples and self.recent_scan_samples[0][0] < cutoff:
             self.recent_scan_samples.pop(0)
 
-        # 4. Ray-Clearing libero
-        max_clear = r_m - 0.08
-        if max_clear > 0.15:
-            for d in np.arange(0.12, max_clear, 0.08):
-                cx = round((d * sin_a) / self.spatial_res)
-                cy = round((d * cos_a) / self.spatial_res)
-                self.occupied_map.pop((cx, cy), None)
+        # 6. Ray-Clearing Rigoroso (Algoritmo Bresenham / DDA lungo il raggio)
+        # Svuota ogni singola cella attraversata dalla linea di vista fino a r_m - 6 cm
+        target_grid_x = int(round(x / self.spatial_res))
+        target_grid_y = int(round(y / self.spatial_res))
+        
+        self._bresenham_ray_clear(target_grid_x, target_grid_y, max_clear_ratio=max(0.0, (r_m - 0.06) / r_m))
 
-        # 5. Salva sulla mappa ciano fissa solo le pareti stabili
+        # 7. Aggiornamento Occupancy Grid con Confidenza
         if not is_foreground_target:
-            hit_key = (round(x / self.spatial_res), round(y / self.spatial_res))
-            self.occupied_map[hit_key] = [x, y, interp_angle, distance_cm]
+            hit_key = (target_grid_x, target_grid_y)
+            if hit_key in self.occupied_map:
+                # Incrementa la confidenza del muro (max 5)
+                self.occupied_map[hit_key][4] = min(5, self.occupied_map[hit_key][4] + 1)
+                self.occupied_map[hit_key][0] = x
+                self.occupied_map[hit_key][1] = y
+                self.occupied_map[hit_key][2] = interp_angle
+                self.occupied_map[hit_key][3] = distance_cm
+            else:
+                # Nuovo punto: parte con confidenza 1
+                self.occupied_map[hit_key] = [x, y, interp_angle, distance_cm, 1]
 
-        # 6. Aggiornamento GUI a 30 FPS
+        # 8. Refresh GUI (mostra solo i punti con confidenza >= 2 per escludere glitch e transitori)
         if now - self._last_gui_update > 0.033:
-            self.xy_coords = [[pt[0], pt[1]] for pt in self.occupied_map.values()]
-            self.points_history = [tuple(pt) for pt in self.occupied_map.values()]
+            self.xy_coords = [[pt[0], pt[1]] for pt in self.occupied_map.values() if pt[4] >= 2]
+            self.points_history = [tuple(pt[:4]) for pt in self.occupied_map.values() if pt[4] >= 2]
             self.map_updated.emit()
             self._last_gui_update = now
 
+    def _bresenham_ray_clear(self, x1, y1, max_clear_ratio=0.90):
+        """Svuota tutte le celle raster attraversate dal laser da (0,0) a (x1, y1)."""
+        x0, y0 = 0, 0
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+
+        total_steps = max(dx, dy)
+        if total_steps == 0:
+            return
+
+        clear_steps = int(total_steps * max_clear_ratio)
+        cur_step = 0
+        cx, cy = x0, y0
+
+        while cur_step < clear_steps:
+            if cur_step > 3:  # Non cancellare la cella centrale dove poggia lo scanner
+                if (cx, cy) in self.occupied_map:
+                    # Se il laser attraversa una cella occupata, ne degrada la confidenza
+                    self.occupied_map[(cx, cy)][4] -= 1
+                    if self.occupied_map[(cx, cy)][4] <= 0:
+                        del self.occupied_map[(cx, cy)]
+
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+            cur_step += 1
+
     def get_sorted_scan(self):
-        """Restituisce le letture recenti ordinate per angolo."""
         return sorted([(p[1], p[2], p[3], p[4]) for p in self.recent_scan_samples], key=lambda item: item[0])
 
     def clear(self):
