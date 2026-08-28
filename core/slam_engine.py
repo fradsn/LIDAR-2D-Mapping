@@ -5,7 +5,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 class SLAMEngine(QObject):
     map_updated = pyqtSignal()
 
-    def __init__(self, spatial_resolution_m=0.03, time_tolerance_ms=80.0):
+    def __init__(self, spatial_resolution_m=0.03, time_tolerance_ms=100.0):
         super().__init__()
         self.spatial_res = spatial_resolution_m
         self.tolerance_sec = time_tolerance_ms / 1000.0
@@ -16,12 +16,13 @@ class SLAMEngine(QObject):
         self.xy_coords = []
         self.current_interpolated_angle = 0.0
 
-        # Background Map: distanza stimata della parete statica (0-359 gradi)
-        self.background_map = np.zeros(360, dtype=np.float32)
+        # Background Map ad alta risoluzione: 720 slot (0.5 gradi)
+        self.NUM_BG_SLOTS = 720
+        self.background_map = np.zeros(self.NUM_BG_SLOTS, dtype=np.float32)
 
-        # Buffer a 720 slot (0.5°): salva (timestamp, ang, dist_cm, x, y)
-        self.NUM_SLOTS = 720
-        self.polar_slots = [None] * self.NUM_SLOTS
+        # Coda di campionamento polare continua per il Target Detector
+        self.recent_scan_samples = []
+        self.scan_retention_sec = 2.0  # Finestra temporale ottimale (2.0s)
         
         self._last_gui_update = 0.0
 
@@ -39,7 +40,7 @@ class SLAMEngine(QObject):
 
         now = time.perf_counter()
 
-        # Interpolazione temporale
+        # Interpolazione temporale precisa
         t0, a0 = None, None
         t1, a1 = None, None
         for i in range(len(self.angle_buffer) - 1, 0, -1):
@@ -73,28 +74,33 @@ class SLAMEngine(QObject):
         x = r_m * sin_a
         y = r_m * cos_a
 
-        deg_idx = int(interp_angle) % 360
-        bg_dist = self.background_map[deg_idx]
+        # Calcolo slot a 0.5°
+        bg_idx = int((interp_angle % 360.0) / (360.0 / self.NUM_BG_SLOTS)) % self.NUM_BG_SLOTS
+        bg_dist = self.background_map[bg_idx]
 
-        # 1. Aggiornamento Background Map
+        # 1. Discriminazione: distacco netto di almeno 22 cm dalla parete nota
+        is_foreground_target = (bg_dist > 0.35) and ((bg_dist - r_m) > 0.22)
+
+        # 2. Aggiornamento protetto del Background Map
         if bg_dist == 0.0:
-            self.background_map[deg_idx] = r_m
+            self.background_map[bg_idx] = r_m
             bg_dist = r_m
-        elif r_m > bg_dist + 0.10:
-            # Il raggio va oltre: il muro reale è più lontano
-            self.background_map[deg_idx] = r_m
+        elif r_m > bg_dist + 0.08:
+            # Parete reale più lontana
+            self.background_map[bg_idx] = r_m
             bg_dist = r_m
-        else:
-            self.background_map[deg_idx] = 0.98 * bg_dist + 0.02 * r_m
+        elif not is_foreground_target:
+            # Assestamento solo su superfici perimetrali
+            self.background_map[bg_idx] = 0.98 * bg_dist + 0.02 * r_m
 
-        # 2. Aggiornamento Buffer Polare (per Target Detection a 360°)
-        slot_idx = int((interp_angle % 360.0) / (360.0 / self.NUM_SLOTS)) % self.NUM_SLOTS
-        self.polar_slots[slot_idx] = (now, interp_angle, distance_cm, x, y)
+        # 3. Accumulo cronologico per il Detector
+        self.recent_scan_samples.append((now, interp_angle, distance_cm, x, y))
 
-        # 3. Discriminazione: Parete Statica vs Target Dinamico
-        is_foreground_target = (bg_dist > 0.3) and ((bg_dist - r_m) > 0.18)
+        cutoff_time = now - self.scan_retention_sec
+        while self.recent_scan_samples and self.recent_scan_samples[0][0] < cutoff_time:
+            self.recent_scan_samples.pop(0)
 
-        # 4. Ray-Clearing leggero
+        # 4. Ray-Clearing libero
         max_clear = r_m - 0.08
         if max_clear > 0.15:
             for d in np.arange(0.12, max_clear, 0.08):
@@ -102,7 +108,7 @@ class SLAMEngine(QObject):
                 cy = round((d * cos_a) / self.spatial_res)
                 self.occupied_map.pop((cx, cy), None)
 
-        # 5. Registra nella mappa solo i muri/ostacoli stabili (non i target volatili)
+        # 5. Salva sulla mappa ciano fissa solo le pareti stabili
         if not is_foreground_target:
             hit_key = (round(x / self.spatial_res), round(y / self.spatial_res))
             self.occupied_map[hit_key] = [x, y, interp_angle, distance_cm]
@@ -115,22 +121,14 @@ class SLAMEngine(QObject):
             self._last_gui_update = now
 
     def get_sorted_scan(self):
-        """Restituisce solo i punti dell'ultimo giro (~1.2s max), eliminando target spariti."""
-        now = time.perf_counter()
-        valid_samples = []
-        for s in self.polar_slots:
-            if s is not None:
-                ts, ang, dist_cm, x, y = s
-                # Se il punto ha più di 1.2 secondi, è scaduto e viene ignorato
-                if (now - ts) <= 1.2:
-                    valid_samples.append((ang, dist_cm, x, y))
-        return sorted(valid_samples, key=lambda p: p[0])
+        """Restituisce le letture recenti ordinate per angolo."""
+        return sorted([(p[1], p[2], p[3], p[4]) for p in self.recent_scan_samples], key=lambda item: item[0])
 
     def clear(self):
         self.angle_buffer.clear()
         self.occupied_map.clear()
         self.xy_coords.clear()
         self.points_history.clear()
-        self.polar_slots = [None] * self.NUM_SLOTS
+        self.recent_scan_samples.clear()
         self.background_map.fill(0)
         self.map_updated.emit()
