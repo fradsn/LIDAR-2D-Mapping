@@ -176,8 +176,8 @@ void loop() {
         currentAbsoluteStep += direction;
       }
 
-      // Notifica ogni 16 micro-passi
-      if (abs(currentAbsoluteStep) % 16 == 0) {
+      // Notifica ad alta risoluzione (ogni 4 micro-passi)
+      if (abs(currentAbsoluteStep) % 4 == 0) {
         float plateDeg = ((float)currentAbsoluteStep / (float)TOTAL_PLATE_STEPS) * 360.0f;
         if (plateDeg < 0.0f) plateDeg += 360.0f;
 

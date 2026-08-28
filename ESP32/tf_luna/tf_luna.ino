@@ -153,7 +153,7 @@ void loop() {
       pDataCharacteristic->setValue(packet, 7);
       pDataCharacteristic->notify();
     }
+  } else {
+    delay(1);
   }
-  
-  delay(10);
 }
