@@ -47,6 +47,11 @@ https://github.com/user-attachments/assets/2209494f-8b82-4bdb-b7f4-68df61fd2e87
 </p>
 
 ---
+<img width="3072" height="4080" alt="IMG_20260828_221050443" src="https://github.com/user-attachments/assets/e6530bf7-56e5-4684-b911-a08a870b3ee6" />
+<img width="3072" height="4080" alt="IMG_20260828_220927330" src="https://github.com/user-attachments/assets/02a12e3a-6329-41d1-9425-f05d328275e8" />
+<img width="4080" height="3072" alt="IMG_20260828_220937666" src="https://github.com/user-attachments/assets/8642cec4-73e0-41fd-b493-e9b802801f99" />
+<img width="3072" height="4080" alt="IMG_20260828_220832221" src="https://github.com/user-attachments/assets/febf6096-863c-4f4e-a5eb-b507021b2971" />
+<img width="3072" height="4080" alt="IMG_20260828_220851512" src="https://github.com/user-attachments/assets/197a79d0-bc4e-405e-8c93-a3f581aa6106" />
 
 ## 🏗️ System Architecture
 
