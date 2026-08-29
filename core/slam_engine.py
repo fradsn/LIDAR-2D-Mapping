@@ -74,8 +74,10 @@ class SLAMEngine(QObject):
         r_m = distance_cm / 100.0
         sin_a = float(np.sin(rad))
         cos_a = float(np.cos(rad))
-        x = r_m * sin_a
-        y = r_m * cos_a
+        
+        # Inversione asse X per compensare il montaggio capovolto del sensore
+        x = -r_m * sin_a
+        y =  r_m * cos_a
 
         # 2. Aggiornamento Background Map
         bg_idx = int((interp_angle % 360.0) / (360.0 / self.NUM_BG_SLOTS)) % self.NUM_BG_SLOTS
@@ -85,20 +87,20 @@ class SLAMEngine(QObject):
             self.background_map[bg_idx] = r_m
         elif r_m > current_bg:
             self.background_map[bg_idx] = 0.80 * current_bg + 0.20 * r_m
-        else:
-            self.background_map[bg_idx] = 0.998 * current_bg + 0.002 * r_m
+        elif (current_bg - r_m) < 0.15:
+            self.background_map[bg_idx] = 0.995 * current_bg + 0.005 * r_m
 
         # 3. Classificazione Punto Foreground
         bg_dist = self.background_map[bg_idx]
         is_foreground = (bg_dist > 0.40) and ((bg_dist - r_m) > 0.20) and ((r_m / bg_dist) < 0.88)
 
-        # 4. Buffer per Detector
+        # 4. Buffer per Detector (passa x, y corretti)
         self.recent_scan_samples.append((now, interp_angle, distance_cm, x, y))
         cutoff = now - self.scan_retention_sec
         while self.recent_scan_samples and self.recent_scan_samples[0][0] < cutoff:
             self.recent_scan_samples.pop(0)
 
-        # 5. Ray-Clearing sicuro lungo il raggio (senza erodere l'impatto)
+        # 5. Ray-Clearing sicuro lungo il raggio
         target_grid_x = int(round(x / self.spatial_res))
         target_grid_y = int(round(y / self.spatial_res))
         self._bresenham_ray_clear(target_grid_x, target_grid_y, max_clear_ratio=max(0.0, (r_m - 0.06) / r_m))

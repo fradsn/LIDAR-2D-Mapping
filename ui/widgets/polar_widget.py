@@ -13,7 +13,7 @@ class PolarWidget(QWidget):
     def set_telemetry(self, angle_deg, distance_cm):
         self._angle_deg = angle_deg
         self._distance_cm = distance_cm
-        self.update()  # Richiede il ridisegno
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -43,23 +43,24 @@ class PolarWidget(QWidget):
         painter.drawLine(0, int(-radius), 0, int(radius))
         painter.drawLine(int(-radius), 0, int(radius), 0)
 
-        # 4. Tacche dei gradi e punti cardinali
+        # 4. Tacche dei gradi e punti cardinali (Inversione orizzontale coerente con il LiDAR)
         painter.setPen(QPen(QColor(120, 140, 170), 1))
         font = QFont("Arial", 8)
         painter.setFont(font)
         
         for deg in range(0, 360, 30):
-            rad = math.radians(deg - 90)
-            x_outer = radius * math.cos(rad)
-            y_outer = radius * math.sin(rad)
-            x_inner = (radius - 8) * math.cos(rad)
-            y_inner = (radius - 8) * math.sin(rad)
+            rad = math.radians(deg)
+            # Inversione asse X coerente
+            x_outer = -radius * math.sin(rad)
+            y_outer = -radius * math.cos(rad)
+            x_inner = -(radius - 8) * math.sin(rad)
+            y_inner = -(radius - 8) * math.cos(rad)
             painter.drawLine(int(x_inner), int(y_inner), int(x_outer), int(y_outer))
 
-        # 5. Lancetta di orientamento istantaneo
-        target_rad = math.radians(self._angle_deg - 90)
-        needle_x = radius * 0.9 * math.cos(target_rad)
-        needle_y = radius * 0.9 * math.sin(target_rad)
+        # 5. Lancetta di orientamento istantaneo (punta nella direzione reale del laser)
+        target_rad = math.radians(self._angle_deg)
+        needle_x = -radius * 0.9 * math.sin(target_rad)
+        needle_y = -radius * 0.9 * math.cos(target_rad)
 
         painter.setPen(QPen(QColor(255, 60, 80), 3))
         painter.drawLine(0, 0, int(needle_x), int(needle_y))
@@ -68,7 +69,7 @@ class PolarWidget(QWidget):
         painter.setBrush(QBrush(QColor(255, 60, 80)))
         painter.drawEllipse(QPointF(0, 0), 4, 4)
 
-        # 6. Testo Telemetria al centro/basso
+        # 6. Testo Telemetria
         painter.setPen(QColor(220, 230, 245))
         painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         text_str = f"{self._angle_deg:.1f}°\n{int(self._distance_cm)} cm"

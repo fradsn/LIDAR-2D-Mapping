@@ -11,7 +11,8 @@ class DetectedTarget:
         self.y = float(self.centroid[1])
         
         self.distance_m = float(np.hypot(self.x, self.y))
-        self.azimuth_deg = float(np.rad2deg(np.arctan2(self.x, self.y)) % 360.0)
+        # Correzione con -self.x per allineare l'azimut all'angolo reale del motore
+        self.azimuth_deg = float(np.rad2deg(np.arctan2(-self.x, self.y)) % 360.0)
         self.radius_m = max(float(np.max(np.linalg.norm(self.points - self.centroid, axis=1))), 0.08)
 
 class TargetDetector:
@@ -100,7 +101,6 @@ class TargetDetector:
             # --- FILTRO SUPERFICI SPECULARI PIATTE (Mobili Lucidi / Vetro) ---
             cov = np.cov(pts_xy, rowvar=False)
             if cov.shape == (2, 2):
-                # np.linalg.eigh garantisce autovalori reali puri ordinati in modo crescente [min, max]
                 eigenvalues, _ = np.linalg.eigh(cov)
                 lambda_min = float(max(0.0, eigenvalues[0]))
                 lambda_max = float(max(0.0, eigenvalues[1]))

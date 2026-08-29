@@ -11,7 +11,6 @@ class MapCanvas(QWidget):
         self.grid_size = grid_size_m
         self.target_items = []
         
-        # Abilita il focus della tastiera sul widget per intercettare Spazio ed Esc
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Stato Strumento Misura
@@ -81,19 +80,17 @@ class MapCanvas(QWidget):
             self.plot_widget.addItem(txt)
 
     def draw_tracking_cone(self, min_deg: float, max_deg: float, center_deg: float):
-        """Disegna il cono visivo dinamico di tracking."""
+        """Disegna il cono visivo dinamico con coordinate speculari X coerenti."""
         self.clear_tracking_cone()
-        cone_len = 7.5  # Lunghezza del fascio visivo sul canvas in metri
+        cone_len = 7.5
 
         rad_min = np.deg2rad(min_deg)
         rad_max = np.deg2rad(max_deg)
 
-        x_min, y_min = cone_len * np.sin(rad_min), cone_len * np.cos(rad_min)
-        x_max, y_max = cone_len * np.sin(rad_max), cone_len * np.cos(rad_max)
+        x_min, y_min = -cone_len * np.sin(rad_min), cone_len * np.cos(rad_min)
+        x_max, y_max = -cone_len * np.sin(rad_max), cone_len * np.cos(rad_max)
 
-        # Linea limite sinistro cono
         l1 = self.plot_widget.plot([0, x_min], [0, y_min], pen=pg.mkPen('#ff6d00', width=1.5, style=Qt.PenStyle.DashLine))
-        # Linea limite destro cono
         l2 = self.plot_widget.plot([0, x_max], [0, y_max], pen=pg.mkPen('#ff6d00', width=1.5, style=Qt.PenStyle.DashLine))
 
         l1.setZValue(8)
@@ -104,7 +101,6 @@ class MapCanvas(QWidget):
         self.cone_items.extend([l1, l2])
 
     def clear_tracking_cone(self):
-        """Rimuove il cono visivo dal canvas."""
         if hasattr(self, 'cone_items'):
             for itm in self.cone_items:
                 try:
@@ -123,13 +119,10 @@ class MapCanvas(QWidget):
             self.plot_widget.setCursor(Qt.CursorShape.ArrowCursor)
 
     def keyPressEvent(self, event):
-        """Intercetta SPAZIO o ESC per annullare o cancellare misure."""
         if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Escape):
             if self.measure_start_pt is not None:
-                # Annulla la misura in corso e rimuove P1
                 self._cancel_current_measurement()
             elif self.measure_groups:
-                # Cancella l'ultima quota salvata (Undo)
                 last_group = self.measure_groups.pop()
                 for itm in last_group:
                     self.plot_widget.removeItem(itm)
@@ -144,12 +137,12 @@ class MapCanvas(QWidget):
         mouse_point = self.vb.mapSceneToView(pos)
         mx, my = mouse_point.x(), mouse_point.y()
         r_m = float(np.hypot(mx, my))
-        ang_deg = float(np.rad2deg(np.arctan2(mx, my)) % 360.0)
+        # Angolo corretto rispetto al piano cartesiano speculare
+        ang_deg = float(np.rad2deg(np.arctan2(-mx, my)) % 360.0)
 
         self.lbl_cursor_coords.setText(f"Cursore: X={mx:+.2f}m, Y={my:+.2f}m | R={r_m:.2f}m, θ={ang_deg:5.1f}°")
         self.cursor_position_changed.emit(mx, my, r_m, ang_deg)
 
-        # Linea elastica temporanea
         if self.measure_mode and self.measure_start_pt is not None:
             p1 = self.measure_start_pt
             dist = np.hypot(mx - p1[0], my - p1[1])
@@ -170,27 +163,22 @@ class MapCanvas(QWidget):
         if not self.measure_mode:
             return
 
-        # Cattura il focus da tastiera quando si clicca sul canvas
         self.setFocus()
-
         pos = event.scenePos()
         if not self.plot_widget.sceneBoundingRect().contains(pos):
             return
 
-        # Solo il click sinistro fissa i punti di misura
         if event.button() == Qt.MouseButton.LeftButton:
             pt = self.vb.mapSceneToView(pos)
             mx, my = pt.x(), pt.y()
 
             if self.measure_start_pt is None:
-                # 1. Fissa punto di partenza temporaneo
                 self.measure_start_pt = (mx, my)
                 self.start_marker_item = self.plot_widget.plot(
                     [mx], [my],
                     symbol='o', symbolSize=8, symbolBrush='#ff9100', symbolPen=pg.mkPen('#ffffff', width=1.5)
                 )
             else:
-                # 2. Fissa punto finale e salva la quota
                 p1 = self.measure_start_pt
                 p2 = (mx, my)
                 dist = np.hypot(p2[0] - p1[0], p2[1] - p1[1])
@@ -246,8 +234,8 @@ class MapCanvas(QWidget):
 
         rad = np.deg2rad(angle_deg)
         r_m = distance_cm / 100.0
-        x = r_m * np.sin(rad)
-        y = r_m * np.cos(rad)
+        x = -r_m * np.sin(rad)
+        y =  r_m * np.cos(rad)
 
         self.laser_beam.setData([0, x], [0, y])
         self.hit_marker.setData([x], [y])
