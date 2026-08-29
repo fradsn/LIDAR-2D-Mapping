@@ -183,7 +183,7 @@ class MainWindow(QMainWindow):
 
         self.btn_clear.clicked.connect(self._on_clear_clicked)
         self.btn_clear_measures.clicked.connect(self.map_canvas.clear_measurements)
-        self.btn_reset_view.clicked.connect(self.map_canvas.reset_view)
+        self.btn_reset_view.clicked.connect(self._on_reset_view_clicked)
         self.btn_export_csv.clicked.connect(self._save_csv)
         self.btn_export_dxf.clicked.connect(self._save_dxf)
 
@@ -240,8 +240,9 @@ class MainWindow(QMainWindow):
             self.map_canvas.clear_targets()
             self.lbl_targets_info.setText("Target Rilevati: 0")
 
-        # Alimenta il motore di inseguimento FSM
-        self.tracker.process_targets(targets)
+        # Alimenta il motore di inseguimento FSM solo se la scansione è attiva
+        if self.is_scanning:
+            self.tracker.process_targets(targets)
 
     def _on_speed_changed(self, val):
         self.lbl_speed.setText(f"Velocità: {val} RPM")
@@ -250,15 +251,16 @@ class MainWindow(QMainWindow):
             self.ble.send_speed_command(val)
 
     def _on_zero_calibrate(self):
+        """Invia solo il byte di calibrazione software all'ESP32 senza avviare la scansione."""
         self.ble.send_zero_calibration()
         self.slam.clear()
-        self.tracker.reset_to_full_scan()
         self.map_canvas.update_points([])
         self.map_canvas.clear_targets()
         self.map_canvas.clear_measurements()
         self.map_canvas.clear_tracking_cone()
         self.map_canvas.update_laser(self.current_angle, 0)
         self.lbl_targets_info.setText("Target Rilevati: 0")
+        self.lbl_status.setText("Zero calibrato con successo.")
 
     def _on_toggle_ble(self):
         if not self.is_connected:
@@ -303,14 +305,18 @@ class MainWindow(QMainWindow):
         self.map_canvas.update_points(self.slam.xy_coords)
 
     def _on_clear_clicked(self):
+        """Pulisce esclusivamente i dati in memoria e la vista grafica senza toccare il motore."""
         self.slam.clear()
-        self.tracker.reset_to_full_scan()
         self.map_canvas.update_points([])
         self.map_canvas.clear_targets()
         self.map_canvas.clear_measurements()
         self.map_canvas.clear_tracking_cone()
         self.map_canvas.update_laser(self.current_angle, 0)
         self.lbl_targets_info.setText("Target Rilevati: 0")
+
+    def _on_reset_view_clicked(self):
+        """Reimposta esclusivamente i limiti della vista grafica del canvas."""
+        self.map_canvas.reset_view()
 
     def _save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Salva CSV", "", "CSV Files (*.csv)")
